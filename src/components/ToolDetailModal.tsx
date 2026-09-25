@@ -47,7 +47,11 @@ export const ToolDetailModal: React.FC<ToolDetailModalProps> = ({
 
   if (!isOpen || !tool) return null;
 
-  const bridgeUrl = `${window.location.origin}/api/tools/${tool.id}/download`;
+  // Tampermonkey only intercepts URLs ending in ".user.js" — QR must use the direct
+  // script endpoint, not /api/tools/:id/download
+  const bridgeUrl = isTampermonkey && tool.scriptFileName
+    ? `${window.location.origin}/api/download/${tool.scriptFileName}`
+    : `${window.location.origin}/api/tools/${tool.id}/download`;
   const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(bridgeUrl)}`;
 
   const handleCopyHash = () => {

@@ -294,6 +294,8 @@ async function syncGoogleDriveFolder(folderUrl: string, force = false): Promise<
 
     if (files.length === 0) {
       isSyncingDrive = false;
+      // Mark sync as attempted even on failure so /api/download won't hammer Drive every 15s
+      lastDriveSyncTime = Date.now();
       return {
         success: false,
         message: "未能從 Google Drive 資料夾讀取到檔案，請確認資料夾分享權限已設為『知道連結的任何人均可查看』",
@@ -562,6 +564,7 @@ async function syncGoogleDriveFolder(folderUrl: string, force = false): Promise<
   } catch (err: any) {
     console.error("[GDrive Sync Error]:", err);
     isSyncingDrive = false;
+    lastDriveSyncTime = Date.now();
     return {
       success: false,
       message: `同步時發生錯誤: ${err.message || err}`,
@@ -602,26 +605,14 @@ function saveAdminSettings() {
   }
 }
 
-// Helper to dynamically inject exact canonical @updateURL and @downloadURL matching current server domain
-function formatScriptWithDynamicMetadata(scriptText: string, filename: string, req: express.Request): string {
-  // Check headers passed by Google Cloud Run / AI Studio reverse proxy
-  const rawForwardedHost = (req.headers['x-forwarded-host'] as string) || '';
-  const forwardedHost = rawForwardedHost.split(',')[0].trim();
-  let host = forwardedHost || req.headers.host || req.get('host') || 'ais-dev-76nnsiusrjtzaug63cm3vc-250570067517.asia-northeast1.run.app';
-
-  // If host is localhost but request came through remote referer or Cloud Run
-  if ((host.includes('localhost') || host.includes('127.0.0.1')) && req.headers.referer) {
-    try {
-      const refUrl = new URL(req.headers.referer);
-      if (refUrl.host && !refUrl.host.includes('localhost')) {
-        host = refUrl.host;
-      }
-    } catch (e) {}
-  }
-
-  const rawProto = (req.headers['x-forwarded-proto'] as string) || (req.secure ? 'https' : 'http');
-  const proto = (host.includes('.run.app') || rawProto === 'https' || req.secure) ? 'https' : rawProto;
-  const scriptUrl = `${proto}://${host}/api/download/${filename}`;
+// Helper to inject canonical @updateURL and @downloadURL.
+// IMPORTANT: Always pin to the stable production domain (CANONICAL_SCRIPT_HOST env or fallback).
+// NEVER use the ephemeral request host (AI Studio preview / localhost) — otherwise scripts
+// installed from a temporary preview URL will silently fail Tampermonkey update checks
+// once that preview domain expires.
+function formatScriptWithDynamicMetadata(scriptText: string, filename: string, _req: express.Request): string {
+  const canonicalHost = process.env.CANONICAL_SCRIPT_HOST || 'ais-dev-76nnsiusrjtzaug63cm3vc-250570067517.asia-northeast1.run.app';
+  const scriptUrl = `https://${canonicalHost}/api/download/${filename}`;
 
   const metaStart = scriptText.indexOf('// ==UserScript==');
   const metaEnd = scriptText.indexOf('// ==/UserScript==');
@@ -821,6 +812,18 @@ async function startServer() {
       return res.status(404).send("找不到該 APK 工具套件");
     }
 
+    const targetUrl = tool.downloadUrl || 'https://drive.google.com';
+
+    const isUserScript = tool.category === 'Tampermonkey' || targetUrl.endsWith('.user.js') || (tool.downloadUrl && tool.downloadUrl.includes('.user.js'));
+
+    // Userscript: redirect to the canonical .user.js endpoint so that Tampermonkey can
+    // intercept the navigation — it only catches URLs that actually END with ".user.js".
+    // (Serving the script body from /api/tools/:id/download would just show raw JS text,
+    // breaking QR-code installs.)
+    if (isUserScript && targetUrl.startsWith('/api/download/')) {
+      return res.redirect(302, targetUrl);
+    }
+
     // Increment download count (persisted across restarts and synced with Google Drive base)
     downloadsDelta[id] = (downloadsDelta[id] || 0) + 1;
     tool.downloadCount = (tool.downloadCount || 0) + 1;
@@ -829,10 +832,6 @@ async function startServer() {
 
     // Automatically record download event to Google Form
     recordDownloadToGoogleForm(id, tool.version || 'v1.0').catch(console.error);
-
-    const targetUrl = tool.downloadUrl || 'https://drive.google.com';
-
-    const isUserScript = tool.category === 'Tampermonkey' || targetUrl.endsWith('.user.js') || (tool.downloadUrl && tool.downloadUrl.includes('.user.js'));
 
     // Set download header with friendly filename
     const sanitizedName = tool.name.replace(/[^\w\u4e00-\u9fa5_.-]/g, '_');
@@ -971,6 +970,19 @@ async function startServer() {
       }
 
       if (fs.existsSync(localFilePath)) {
+        // Count the install/download only for real navigations (Sec-Fetch-Dest: document).
+        // Skip fetch() requests from the in-site script preview viewer to avoid inflated counts.
+        const secFetchDest = (req.headers['sec-fetch-dest'] as string) || 'document';
+        if (secFetchDest === 'document') {
+          const linkedTool = apkToolsStore.find(t => t.scriptFileName === filename || t.downloadUrl === `/api/download/${filename}`);
+          if (linkedTool) {
+            downloadsDelta[linkedTool.id] = (downloadsDelta[linkedTool.id] || 0) + 1;
+            linkedTool.downloadCount = (linkedTool.downloadCount || 0) + 1;
+            saveTools();
+            saveDeltas();
+            recordDownloadToGoogleForm(linkedTool.id, linkedTool.version || 'v1.0').catch(console.error);
+          }
+        }
         const rawScript = fs.readFileSync(localFilePath, 'utf-8');
         const formatted = formatScriptWithDynamicMetadata(rawScript, filename, req);
         return res.send(formatted);

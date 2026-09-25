@@ -12,12 +12,15 @@ interface ToolCardProps {
 
 export const ToolCard: React.FC<ToolCardProps> = ({ tool, onSelect, onDownload, onDelete, isUnlocked }) => {
   const [qrOpen, setQrOpen] = useState(false);
+  const isTampermonkey = tool.category === 'Tampermonkey' || tool.downloadUrl.includes('.user.js');
 
-  const bridgeUrl = `${window.location.origin}/api/tools/${tool.id}/download`;
+  // Tampermonkey only intercepts URLs ending in ".user.js" — QR must use the direct
+  // script endpoint, not /api/tools/:id/download
+  const bridgeUrl = isTampermonkey && tool.scriptFileName
+    ? `${window.location.origin}/api/download/${tool.scriptFileName}`
+    : `${window.location.origin}/api/tools/${tool.id}/download`;
 
   const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(bridgeUrl)}`;
-
-  const isTampermonkey = tool.category === 'Tampermonkey' || tool.downloadUrl.includes('.user.js');
 
   // Icon selector based on category / string
   const renderIcon = () => {
