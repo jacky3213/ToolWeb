@@ -33,11 +33,11 @@
     "id": "olevod-preloader",
     "name": "Olevod 影片預載器 (Video Preloader)",
     "packageName": "https://github.com/jacky3213",
-    "version": "v1.2.0",
+    "version": "v1.2.1",
     "versionCode": 100,
     "minSdk": "Tampermonkey (Chrome/Firefox/Edge)",
     "architecture": "universal",
-    "fileSize": "31.2 KB",
+    "fileSize": "30.9 KB",
     "icon": "Terminal",
     "category": "Tampermonkey",
     "summary": "在 Olevod 看片時提前預下載後續 HLS 分片（5/10/15/30 分鐘可選），支援智...",
@@ -49,12 +49,12 @@
     "scriptFileName": "olevod-preloader.user.js",
     "rating": 5,
     "releaseDate": "2026-09-25",
-    "checksumSha256": "fa3a26cf468ba879b6779bd36242ec49f7e88f179621066af8fc86442ba81a1f",
+    "checksumSha256": "daec3f525feb2a9e62d1a39198c35454295d116c372125de1f7b87621513ca57",
     "screenshots": [],
     "isOfficial": true,
     "isFeatured": false,
     "baseDownloadCount": 0,
-    "downloadCount": 4
+    "downloadCount": 6
   },
   {
     "id": "uu-preloader",
@@ -81,6 +81,6 @@
     "isOfficial": true,
     "isFeatured": false,
     "baseDownloadCount": 0,
-    "downloadCount": 15
+    "downloadCount": 17
   }
 ]

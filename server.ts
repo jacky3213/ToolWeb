@@ -30,6 +30,12 @@ if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
+// Canonical raw source for Tampermonkey userscripts.
+// GitHub Raw is public, stable, and cookie-free — the ONLY reliable target for
+// Tampermonkey @updateURL/@downloadURL. (AI Studio / preview domains serve an
+// auth cookie wall to Tampermonkey, breaking update checks silently.)
+const GITHUB_RAW_BASE = process.env.GITHUB_RAW_BASE || 'https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks';
+
 const TOOLS_FILE = path.join(DATA_DIR, 'tools.json');
 const ADMIN_FILE = path.join(DATA_DIR, 'admin.json');
 
@@ -582,6 +588,70 @@ async function syncAllToolsFromGoogleDrive() {
 // Trigger initial background sync on server boot
 syncAllToolsFromGoogleDrive();
 
+// ---- GitHub Raw refresh for Tampermonkey userscripts (source of truth) ----
+// Google Drive folder HTML scraping broke (Drive changed its DOM), so userscripts
+// are now synced from raw.githubusercontent.com instead. Drive sync remains only
+// as a fallback for APK discovery.
+let lastGithubRefreshTime = 0;
+let isRefreshingGithub = false;
+
+async function refreshScriptsFromGitHub(): Promise<{ updated: string[] }> {
+  if (isRefreshingGithub) return { updated: [] };
+  isRefreshingGithub = true;
+  const updated: string[] = [];
+  try {
+    const scriptTools = apkToolsStore.filter(t => t.category === 'Tampermonkey' && t.scriptFileName);
+    for (const tool of scriptTools) {
+      const filename: string = tool.scriptFileName;
+      try {
+        const rawUrl = `${GITHUB_RAW_BASE}/${encodeURIComponent(filename)}`;
+        const res = await fetch(rawUrl, {
+          headers: { "User-Agent": "Mozilla/5.0", "Cache-Control": "no-cache" }
+        });
+        if (!res.ok) {
+          console.warn(`[GitHub Sync] ${filename}: HTTP ${res.status}`);
+          continue;
+        }
+        const scriptText = await res.text();
+        if (!scriptText.includes('// ==UserScript==')) {
+          console.warn(`[GitHub Sync] ${filename}: not a valid userscript, skipped`);
+          continue;
+        }
+
+        const versionMatch = scriptText.match(/@version\s+(.+)/);
+        const version = versionMatch
+          ? (versionMatch[1].trim().startsWith('v') ? versionMatch[1].trim() : `v${versionMatch[1].trim()}`)
+          : tool.version;
+        const sha256 = crypto.createHash('sha256').update(scriptText).digest('hex');
+        const destPath = path.join(UPLOADS_DIR, filename);
+        const currentText = fs.existsSync(destPath) ? fs.readFileSync(destPath, 'utf-8') : '';
+
+        if (currentText !== scriptText) {
+          fs.writeFileSync(destPath, scriptText, 'utf-8');
+          tool.version = version;
+          tool.fileSize = `${(Buffer.byteLength(scriptText, 'utf-8') / 1024).toFixed(1)} KB`;
+          tool.checksumSha256 = sha256;
+          tool.releaseDate = new Date().toISOString().split('T')[0];
+          updated.push(filename);
+          console.log(`[GitHub Sync] Refreshed ${filename} -> ${version} (${tool.fileSize})`);
+        } else if (tool.version !== version) {
+          tool.version = version;
+        }
+      } catch (e) {
+        console.error(`[GitHub Sync] Failed to refresh ${filename}:`, e);
+      }
+    }
+    if (updated.length > 0) saveTools();
+    return { updated };
+  } finally {
+    isRefreshingGithub = false;
+    lastGithubRefreshTime = Date.now();
+  }
+}
+
+// Refresh userscripts from GitHub Raw on boot (after store is loaded)
+refreshScriptsFromGitHub().catch(console.error);
+
 // Admin Passcode Config (Loaded from file or default)
 let adminPasscode = process.env.ADMIN_PASSCODE || "Kevin7777777";
 let isPasscodeRequired = true; // Protect uploading by default
@@ -605,14 +675,12 @@ function saveAdminSettings() {
   }
 }
 
-// Helper to inject canonical @updateURL and @downloadURL.
-// IMPORTANT: Always pin to the stable production domain (CANONICAL_SCRIPT_HOST env or fallback).
-// NEVER use the ephemeral request host (AI Studio preview / localhost) — otherwise scripts
-// installed from a temporary preview URL will silently fail Tampermonkey update checks
-// once that preview domain expires.
+// Helper to inject canonical @updateURL and @downloadURL pointing at GitHub Raw.
+// NEVER use the ephemeral request host (AI Studio preview / localhost) — those URLs
+// are either temporary or behind an auth cookie wall, so Tampermonkey update checks
+// silently fail. Raw GitHub is public and permanent.
 function formatScriptWithDynamicMetadata(scriptText: string, filename: string, _req: express.Request): string {
-  const canonicalHost = process.env.CANONICAL_SCRIPT_HOST || 'ais-dev-76nnsiusrjtzaug63cm3vc-250570067517.asia-northeast1.run.app';
-  const scriptUrl = `https://${canonicalHost}/api/download/${filename}`;
+  const scriptUrl = `${GITHUB_RAW_BASE}/${encodeURIComponent(filename)}`;
 
   const metaStart = scriptText.indexOf('// ==UserScript==');
   const metaEnd = scriptText.indexOf('// ==/UserScript==');
@@ -644,6 +712,10 @@ async function startServer() {
   app.get("/api/tools", (req, res) => {
     if (Date.now() - lastDriveSyncTime > 5 * 60 * 1000 && !isSyncingDrive) {
       syncAllToolsFromGoogleDrive().catch(console.error);
+    }
+    // Userscript source of truth is GitHub Raw — refresh frequently and cheaply
+    if (Date.now() - lastGithubRefreshTime > 60 * 1000 && !isRefreshingGithub) {
+      refreshScriptsFromGitHub().catch(console.error);
     }
     const seen = new Set<string>();
     const clean: any[] = [];
@@ -953,20 +1025,27 @@ async function startServer() {
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
 
-      // Trigger background sync if stale so next check gets fresh Google Drive update without blocking this request
+      // Trigger background refresh if stale so the next check gets the latest version
       const fileMissing = !fs.existsSync(localFilePath);
-      const isStale = Date.now() - lastDriveSyncTime > 15 * 1000;
+      const isStale = Date.now() - lastGithubRefreshTime > 60 * 1000;
 
       if (fileMissing) {
-        // Must wait for sync only if file doesn't exist yet
+        // Refresh from GitHub Raw first (source of truth); fall back to Drive sync for discovery
         try {
-          await syncGoogleDriveFolder("https://drive.google.com/drive/folders/14QqI6hdNNaThvOS8zIRtRrYzGdlrhdqI?usp=sharing", true);
+          await refreshScriptsFromGitHub();
         } catch (e) {
-          console.error("[Download Route] Drive sync error:", e);
+          console.error("[Download Route] GitHub refresh error:", e);
+        }
+        if (!fs.existsSync(localFilePath)) {
+          try {
+            await syncGoogleDriveFolder("https://drive.google.com/drive/folders/14QqI6hdNNaThvOS8zIRtRrYzGdlrhdqI?usp=sharing", true);
+          } catch (e) {
+            console.error("[Download Route] Drive sync error:", e);
+          }
         }
       } else if (isStale || req.query.force === 'true') {
-        // Sync in background asynchronously
-        syncGoogleDriveFolder("https://drive.google.com/drive/folders/14QqI6hdNNaThvOS8zIRtRrYzGdlrhdqI?usp=sharing", true).catch(console.error);
+        // Refresh in background asynchronously
+        refreshScriptsFromGitHub().catch(console.error);
       }
 
       if (fs.existsSync(localFilePath)) {
