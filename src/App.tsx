@@ -8,6 +8,7 @@ import { ToolDetailModal } from './components/ToolDetailModal';
 import { AddToolModal } from './components/AddToolModal';
 import { InstallGuideModal } from './components/InstallGuideModal';
 import { AdminPasscodeModal } from './components/AdminPasscodeModal';
+import { VersionBadge } from './components/VersionBadge';
 
 export function App() {
   const [tools, setTools] = useState<ApkTool[]>([]);
@@ -389,6 +390,9 @@ export function App() {
           <p>© 2026 Custom Clean Tools & Scripts Distribution Center.</p>
         </div>
       </footer>
+
+      {/* Build version badge (bottom-right corner) */}
+      <VersionBadge />
 
       {/* Modals */}
       <ToolDetailModal
