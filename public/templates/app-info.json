@@ -1,0 +1,21 @@
+{
+  "name": "開屏跳過",
+  "packageName": "com.utility.adskip",
+  "version": "v1.4",
+  "versionCode": 140,
+  "apkFileName": "adskip.apk",
+  "summary": "自動點擊開屏廣告與半屏廣告的跳過",
+  "description": "無須root，純粹代為點擊開屏廣告與半屏廣告的跳過。協助您順暢開啟各類 App，減少等待時間與廣告干擾。",
+  "changelog": [
+    "v1.4 增加半屏廣告判定與自動跳過",
+    "v1.3 優化開屏按鈕偵測速度",
+    "無須 Root 權限",
+    "極簡流暢與超低背景耗電"
+  ],
+  "downloadCount": 920,
+  "minSdk": "Android 7.0+ (API 24)",
+  "architecture": "universal",
+  "category": "Utility",
+  "rating": 5.0,
+  "releaseDate": "2026-08-09"
+}

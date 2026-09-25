@@ -1,0 +1,6 @@
+{
+  "name": "APK & Tampermonkey Tool Center",
+  "description": "An elegant, high-performance distribution hub for custom Android tools, APK packages, and Tampermonkey userscripts, featuring version tracking, installation guides, direct download links, and QR code sharing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
