@@ -2,6 +2,8 @@
 // @name         UU看書自動預讀 10 章 (完備版)
 // @namespace    https://github.com/jacky3213
 // @version      2.0
+// @updateURL    https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/UU-preloader.user.js
+// @downloadURL  https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/UU-preloader.user.js
 // @description  預讀10章、閱讀進度智慧跳轉、右側導航面板、防重複/節流/重試/中斷保護
 // @author       K7
 // @match        https://uukanshu.cc/book/*/*

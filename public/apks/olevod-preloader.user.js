@@ -1,8 +1,10 @@
 // ==UserScript==
 // @name         Olevod 影片預載器 (Video Preloader)
 // @namespace    https://github.com/jacky3213
-// @version      1.2.3
+// @version      1.2.4
 // @license      MIT
+// @updateURL    https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/olevod-preloader.user.js
+// @downloadURL  https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/olevod-preloader.user.js
 // @description  在 Olevod 看片時提前預下載後續 HLS 分片（5/10/15/30 分鐘可選），支援智慧預下一集、即時速度/流量/命中率統計、暫停/清除快取、斷點恢復、自動收合、失敗退避重試。
 // @author       Jacky
 // @match        https://www.olevod.com/*
@@ -38,7 +40,7 @@
   window.__olevodPreloaderActive = true;
 
   // 診斷日誌：在 Console 看到「injected」代表腳本已成功注入
-  console.info('%c[Olevod Preloader] v1.2.3 injected @ ' + location.href, 'color:#38bdf8;font-weight:bold');
+  console.info('%c[Olevod Preloader] v1.2.4 injected @ ' + location.href, 'color:#38bdf8;font-weight:bold');
 
   /* ===================== 常數與狀態 ===================== */
   const CACHE_NAME = 'olevod-preload-v1';
