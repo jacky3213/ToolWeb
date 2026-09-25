@@ -51,6 +51,25 @@
     "releaseDate": "2026-09-25",
     "checksumSha256": "daec3f525feb2a9e62d1a39198c35454295d116c372125de1f7b87621513ca57",
     "screenshots": [],
+    "installGuide": {
+      "steps": [
+        "安裝瀏覽器擴充 Tampermonkey（Chrome / Edge 均可）",
+        "點擊「立即安裝腳本」，Tampermonkey 會自動跳出安裝頁，按「安裝」",
+        "打開 Olevod 的影片頁，右下角出現「⚡ Olevod 預載」面板即安裝成功",
+        "在面板上選擇預載時長，等進度條達標後開始觀看"
+      ],
+      "verify": "腳本只在你自己的瀏覽器內運作，會自動清理已看過的內容避免佔用空間。更新版發布後，已安裝的使用者會透過 Tampermonkey 自動更新。",
+      "troubleshooting": {
+        "title": "安裝後無法正常使用？（右下角沒有出現預載面板）",
+        "steps": [
+          "開啟 Chrome／Edge，網址列輸入 chrome://extensions（Edge 為 edge://extensions）",
+          "找到 Tampermonkey，點「詳細資料」",
+          "找到「允許使用者指令碼」（Allow User Scripts）開關 → 打開",
+          "重新整理 Olevod 影片頁，右下角應出現「⚡ Olevod 預載」面板"
+        ],
+        "note": "說明：新版 Chrome／Edge 對使用者腳本新增了獨立權限開關，只開瀏覽器的「開發人員模式」不夠——沒開「允許使用者指令碼」時，腳本裝得進去但完全不會執行，這是最常見的安裝問題。若開啟後仍無效，請確認腳本已啟用，且目前網址是 olevod.com（其他鏡像域名請回報給作者加入支援）。"
+      }
+    },
     "isOfficial": true,
     "isFeatured": false,
     "baseDownloadCount": 0,

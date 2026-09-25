@@ -84,6 +84,29 @@ export const InstallGuideModal: React.FC<InstallGuideModalProps> = ({ isOpen, on
           <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-300/90 leading-relaxed">
             💡 <b>小提示：</b> 如果點擊安裝後瀏覽器只顯示文字代碼而未彈出安裝視窗，請確認您的瀏覽器已安裝並<b>啟用 Tampermonkey (油猴) 擴充套件</b>，並確認已在 Tampermonkey 設定中開啟「允許存取檔案網址」或允許偵測使用者腳本。
           </div>
+
+          {/* Troubleshooting: Allow User Scripts (most common issue) */}
+          <div className="p-4 bg-yellow-500/[0.07] border border-yellow-500/25 rounded-xl space-y-3">
+            <h4 className="text-xs font-bold text-yellow-400 flex items-center gap-1.5">
+              ⚠️ 安裝成功但腳本不執行？（頁面上沒有出現腳本面板）
+            </h4>
+            <div className="space-y-1.5">
+              {[
+                <>開啟 Chrome／Edge，網址列輸入 <code className="bg-white/10 px-1.5 py-0.5 rounded text-yellow-200 font-mono text-[11px]">chrome://extensions</code>（Edge 為 <code className="bg-white/10 px-1.5 py-0.5 rounded text-yellow-200 font-mono text-[11px]">edge://extensions</code>）</>,
+                <>找到 <b className="text-white">Tampermonkey</b>，點「<b className="text-white">詳細資料</b>」</>,
+                <>找到「<b className="text-white">允許使用者指令碼</b>」（Allow User Scripts）開關 → <b className="text-white">打開</b></>,
+                <>重新整理目標網站頁面，腳本面板應該就會出現</>,
+              ].map((content, i) => (
+                <div key={i} className="flex items-start gap-2.5 text-[11px] text-slate-300 leading-relaxed">
+                  <span className="shrink-0 w-4 h-4 rounded-full bg-yellow-600/60 text-white text-[9px] font-bold flex items-center justify-center mt-0.5">{i + 1}</span>
+                  <span>{content}</span>
+                </div>
+              ))}
+            </div>
+            <p className="text-[10px] text-slate-500 leading-relaxed border-t border-yellow-500/15 pt-2">
+              說明：新版 Chrome／Edge 對使用者腳本新增了獨立權限開關，<b className="text-slate-400">只開瀏覽器的「開發人員模式」不夠</b>——沒開「允許使用者指令碼」時，腳本裝得進去但完全不會執行，這是最常見的安裝問題。
+            </p>
+          </div>
         </div>
 
         {/* Steps to Install APK on Phone */}

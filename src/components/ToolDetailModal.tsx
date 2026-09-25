@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Download, QrCode, Shield, Check, Copy, ExternalLink, Calendar, HardDrive, Star, Terminal, Smartphone, Code2, Eye, EyeOff } from 'lucide-react';
+import { X, Download, QrCode, Shield, Check, Copy, ExternalLink, Calendar, HardDrive, Star, Terminal, Smartphone, Code2, Eye, EyeOff, ListChecks, Wrench } from 'lucide-react';
 import { ApkTool } from '../types';
 
 interface ToolDetailModalProps {
@@ -130,6 +130,48 @@ export const ToolDetailModal: React.FC<ToolDetailModalProps> = ({
                 {tool.description}
               </p>
             </div>
+
+            {/* Install Guide (per-tool, for Tampermonkey scripts) */}
+            {isTampermonkey && tool.installGuide && (
+              <div className="space-y-3">
+                <h3 className="text-xs font-mono uppercase tracking-widest text-slate-400 font-bold mb-2 flex items-center gap-1.5">
+                  <ListChecks className="h-4 w-4 text-amber-400" /> 安裝步驟 / INSTALLATION
+                </h3>
+                <ol className="bg-white/5 border border-white/5 rounded-xl p-4 space-y-2.5">
+                  {tool.installGuide.steps.map((step, i) => (
+                    <li key={i} className="flex items-start gap-3 text-xs text-slate-300 leading-relaxed">
+                      <span className="shrink-0 w-5 h-5 rounded-full bg-indigo-600 text-white text-[10px] font-bold flex items-center justify-center mt-0.5">{i + 1}</span>
+                      <span className="font-light">{step}</span>
+                    </li>
+                  ))}
+                </ol>
+                {tool.installGuide.verify && (
+                  <p className="text-[11px] text-slate-500 leading-relaxed px-1">
+                    💡 {tool.installGuide.verify}
+                  </p>
+                )}
+                {tool.installGuide.troubleshooting && (
+                  <div className="p-4 bg-yellow-500/[0.07] border border-yellow-500/25 rounded-xl space-y-3">
+                    <h4 className="text-xs font-bold text-yellow-400 flex items-center gap-1.5">
+                      <Wrench className="h-3.5 w-3.5" /> {tool.installGuide.troubleshooting.title}
+                    </h4>
+                    <div className="space-y-1.5">
+                      {tool.installGuide.troubleshooting.steps.map((step, i) => (
+                        <div key={i} className="flex items-start gap-2.5 text-[11px] text-slate-300 leading-relaxed">
+                          <span className="shrink-0 w-4 h-4 rounded-full bg-yellow-600/60 text-white text-[9px] font-bold flex items-center justify-center mt-0.5">{i + 1}</span>
+                          <span>{step}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {tool.installGuide.troubleshooting.note && (
+                      <p className="text-[10px] text-slate-500 leading-relaxed border-t border-yellow-500/15 pt-2">
+                        {tool.installGuide.troubleshooting.note}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Screenshots */}
             {tool.screenshots && tool.screenshots.length > 0 && (
