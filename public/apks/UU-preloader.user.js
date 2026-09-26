@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UU看書自動預讀 10 章 (完備版)
 // @namespace    https://github.com/jacky3213
-// @version      2.1
+// @version      2.3
 // @updateURL    https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/UU-preloader.user.js
 // @downloadURL  https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/UU-preloader.user.js
 // @description  預讀10章、閱讀進度智慧跳轉、右側導航面板、防重複/節流/重試/中斷保護（支援 uukanshu.cc 與 twkan.com）
@@ -32,40 +32,63 @@
             bookIdRe: /^\/book\/([^/]+)/,
             bookPrefix: '/book/',
             contentSelector: '.readcotent.bbb.font-normal',
+            titleSelector: 'h1',
             nextLinkSelector: '#linkNext',
-            nextByText: false,
+            nextByText: true,                // [MINOR-F] 選擇器優先，落空時有文字後備
         },
         'twkan.com': {
             bookIdRe: /^\/txt\/([^/]+)/,
             bookPrefix: '/txt/',
             contentSelector: '#txtcontent0, #txtcontent',
+            titleSelector: '.txtnav h1, #container .txtnav h1, h1',
             nextLinkSelector: null,          // 無固定 id → 以連結文字辨識
             nextByText: true,
         },
     };
-    const SITE = SITES[location.hostname.replace(/^www\./, '')] || SITES['uukanshu.cc'];
+    const SITE = SITES[location.hostname.replace(/^www\./, '')];
+    if (!SITE) return;                       // 未列入配置的站點不執行
+    const SITE_HOST = location.hostname.replace(/^www\./, '');
 
-    // 取得「下一章」連結：優先用站點選擇器，twkan 以連結文字（下一章/下一頁）辨識
+    // 取得「下一章」連結：選擇器站直接回傳；nextByText 站選擇器落空時，以 rel/class 為主、連結文字為輔
     function findNextLink(rootDoc) {
         const doc = rootDoc || document;
-        if (SITE.nextLinkSelector) return doc.querySelector(SITE.nextLinkSelector);
-        for (const a of doc.querySelectorAll('a')) {
-            if (/下一[章頁页]/.test(a.textContent || '')) return a;
+        if (SITE.nextLinkSelector) {
+            const el = doc.querySelector(SITE.nextLinkSelector);
+            if (el || !SITE.nextByText) return el;
         }
-        return null;
+        const cands = [...doc.querySelectorAll('a[href]')].filter(a => {
+            const h = a.getAttribute('href') || '';
+            return !!h && h !== '#' && !/^javascript:/i.test(h);
+        });
+        // 1) 語意化優先：rel="next" 或 class 含 next
+        const byRel = cands.find(a =>
+            /(^|\s)next(\s|$)/i.test(a.getAttribute('rel') || '') ||
+            /(^|\s)(next|nextchapter|next-chapter)(\s|$)/i.test(a.className || ''));
+        if (byRel) return byRel;
+        // 2) 後備：連結文字比對（去空白，避免「下 一章」或 <span> 分隔漏判）
+        return cands.find(a => /下一[章頁页节]/.test((a.textContent || '').replace(/\s+/g, ''))) || null;
     }
 
-    /* ===== [修#2] 全腳本唯一的 URL 規範化 ===== */
-    const norm = (u) => {
-        try { return new URL(u, location.href).href.split('#')[0]; }
+    /* ===== [修#2] 全腳本唯一的 URL 規範化（base 可指定被抓取頁的 URL） ===== */
+    const norm = (u, base) => {
+        try { return new URL(u, base || location.href).href.split('#')[0]; }
         catch (e) { return String(u || '').split('#')[0]; }
     };
     const here = norm(location.href);
     const bookId = (location.pathname.match(SITE.bookIdRe) || [])[1];
     if (!bookId) return;
+    // 儲存鍵以站點為命名空間，避免兩站相同數字 bookId 互相覆蓋進度
+    const bookKey = location.hostname.replace(/^www\./, '') + ':' + bookId;
     const sameBook = (u) => {
-        try { return new URL(u, location.href).pathname.startsWith(SITE.bookPrefix + bookId + '/'); }
-        catch (e) { return false; }
+        try {
+            // 必須是「同站的同書章節頁」：host 相符、前綴符合、且 id 後有非空章節段（排除目錄頁）
+            const x = new URL(u, location.href);
+            if (x.hostname.replace(/^www\./, '') !== SITE_HOST) return false;   // [m-7]
+            const p = x.pathname;
+            const prefix = SITE.bookPrefix + bookId + '/';
+            if (!p.startsWith(prefix)) return false;
+            return p.slice(prefix.length).replace(/\/+$/, '').length > 0;
+        } catch (e) { return false; }
     };
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -75,11 +98,26 @@
     } catch (e) {}
 
     /* ===== 儲存結構
-       uuVisited  {url: ts}                → 實際看過的章節（IO 偵測）
-       uuProgress {bookId: {last,next,ts}} → 閱讀進度
-       uuNextMap  {bookId: {from,to,ts}}   → 本頁「下一章」點擊跳轉目標 ===== */
+       uuVisited  {url: ts}                     → 實際看過的章節（IO 偵測，完整 URL 為鍵）
+       uuProgress {host:bookId: {last,next,ts}} → 閱讀進度（站點命名空間，跨站不互覆）
+       uuNextMap  {host:bookId: {from,to,ts}}   → 本頁「下一章」點擊跳轉目標 ===== */
     const getMap = (k) => { try { return GM_getValue(k, {}) || {}; } catch (e) { return {}; } };
     const putMap = (k, v) => { try { GM_setValue(k, v); } catch (e) {} };
+    // [m-3 遷移] 舊版以裸 bookId 為鍵，升級後遷移到 host:bookId 命名空間（一次性、只在有舊鍵時寫入）
+    (function migrateStore() {
+        for (const k of ['uuProgress', 'uuNextMap']) {
+            const m = getMap(k);
+            if (!(bookId in m)) continue;
+            if (!m[bookKey]) m[bookKey] = m[bookId];
+            delete m[bookId];
+            putMap(k, m);
+        }
+    })();
+    // [m-7] host 無關比較（twkan.com ↔ www.twkan.com 重定向不破壞連環跳保護）
+    const hostAgnostic = (u) => {
+        try { const x = new URL(u, location.href); return x.hostname.replace(/^www\./, '') + x.pathname; }
+        catch (e) { return String(u || ''); }
+    };
     function trimVisited(m) {
         const keys = Object.keys(m);
         if (keys.length <= 300) return m;
@@ -88,26 +126,32 @@
         return m;
     }
 
-    /* ===== [修#1/#3] 落地跳轉：只跳「看過」的章節，回到上次進度 ===== */
-    (function landingJump() {
+    /* ===== [修#1/#3] 落地跳轉：只跳「看過」的章節，回到上次進度 =====
+       回傳 true 表示已發起跳轉，主流程應中止後續初始化 */
+    const jumped = (function landingJump() {
         let jumpedTo = null;
         try { jumpedTo = sessionStorage.getItem('uuJumpedTo'); } catch (e) {}
-        if (jumpedTo === here) {                    // 剛跳來的 → 不再連環跳
+        if (jumpedTo && hostAgnostic(jumpedTo) === hostAgnostic(here)) {  // 剛跳來的 → 不再連環跳
             try { sessionStorage.removeItem('uuJumpedTo'); } catch (e) {}
-            return;
+            return false;
         }
         const visited = getMap('uuVisited');
-        if (!visited[here] || Date.now() - visited[here] > VISIT_WINDOW) return;
-        const prog = getMap('uuProgress')[bookId];
-        if (!prog || !prog.last || !prog.next) return;
-        if (norm(prog.last) === here) return;       // 這章正是你讀到最後的地方 → 直接讀
+        if (!visited[here] || Date.now() - visited[here] > VISIT_WINDOW) return false;
+        const prog = getMap('uuProgress')[bookKey];
+        if (!prog || !prog.last || !prog.next) return false;
+        // [MINOR-B] 只在「來源正是上次讀到的那一章」時視為回讀不跳（上一章導覽）；
+        // 從目錄頁點已讀章節仍會正常跳回進度點，主功能不受影響
+        try { if (document.referrer && hostAgnostic(document.referrer) === hostAgnostic(prog.last)) return false; } catch (e) {}
+        if (hostAgnostic(prog.last) === hostAgnostic(here)) return false;   // 這章正是你讀到最後的地方 → 直接讀
         const to = norm(prog.next);
-        if (to === here || !sameBook(to)) return;   // [修#1] 同書校驗
-        if (Date.now() - (prog.ts || 0) > VISIT_WINDOW) return;
+        if (to === here || !sameBook(to)) return false;   // [修#1] 同書校驗
+        if (Date.now() - (prog.ts || 0) > VISIT_WINDOW) return false;
         try { sessionStorage.setItem('uuJumpedTo', to); } catch (e) {}
         console.log('⏭️ 此章之前已看過，跳回上次進度:', to);
         location.replace(to);
+        return true;
     })();
+    if (jumped) return;                        // 已跳轉 → 不建面板、不觸發預讀
 
     /* ===== 執行鎖 ===== */
     if (document.documentElement.hasAttribute('data-uu-preload')) return;
@@ -170,7 +214,7 @@
         panel.style.right = 'auto';
     }
     header.addEventListener('pointerdown', (e) => {
-        if (e.target === toggleBtn) return;
+        if (toggleBtn.contains(e.target)) return;
         const rect = panel.getBoundingClientRect();
         const dx = e.clientX - rect.left, dy = e.clientY - rect.top;
         const move = (ev) => {
@@ -249,7 +293,7 @@
             if (next && seq > lastSeq) {           // 進度只前進不倒退
                 lastSeq = seq;
                 const p = getMap('uuProgress');
-                p[bookId] = { last: url, next: norm(next), ts: Date.now() };
+                p[bookKey] = { last: url, next: norm(next), ts: Date.now() };
                 putMap('uuProgress', p);
             }
         }
@@ -257,6 +301,24 @@
 
     /* ===== [修#6] 先查後插，以規範化 URL 為唯一身分 ===== */
     const insertedKeys = new Set();
+    // [m-5] 注入前清洗遠端 HTML：移除危險節點、on* 內聯事件與重複 id（避免干擾站方 JS 與本腳本查詢）
+    function sanitizeContent(el) {
+        const clone = el.cloneNode(true);
+        clone.querySelectorAll('script, style, link, iframe, object, embed, form, meta').forEach(n => n.remove());
+        clone.querySelectorAll('*').forEach(n => {
+            [...n.attributes].forEach(attr => {
+                const name = attr.name.toLowerCase();
+                if (name.startsWith('on') || name === 'srcdoc') { n.removeAttribute(attr.name); return; }
+                if (name === 'href' || name === 'src' || name === 'xlink:href') {
+                    // [MINOR-D] 先去除 tab/換行（可繞過 scheme 檢查），僅擋腳本類與 data:text/html，保留 base64 圖片
+                    const v = String(attr.value || '').replace(/[\t\n\r]/g, '');
+                    if (/^\s*(javascript|vbscript):/i.test(v) || /^\s*data:text\/html/i.test(v)) n.removeAttribute(attr.name);
+                }
+            });
+            if (n.hasAttribute('id')) n.removeAttribute('id');
+        });
+        return clone.innerHTML;
+    }
     function appendChapter(url, title, innerHTML, nextUrl) {
         const container = document.querySelector(SITE.contentSelector);
         if (!container) return false;
@@ -282,12 +344,13 @@
     /* ===== [修#1] 每本書獨立跳轉紀錄 + from/to 校驗 ===== */
     function publishNext(to) {
         const m = getMap('uuNextMap');
-        m[bookId] = { from: here, to: norm(to), ts: Date.now() };
+        m[bookKey] = { from: here, to: norm(to), ts: Date.now() };
         putMap('uuNextMap', m);
     }
     function clickJumpTarget() {
-        const rec = getMap('uuNextMap')[bookId];
+        const rec = getMap('uuNextMap')[bookKey];
         if (!rec || !rec.to) return '';
+        if (Date.now() - (rec.ts || 0) > VISIT_WINDOW) return '';  // [m-2] 過期紀錄不採用
         if (norm(rec.from) !== here) return '';    // 只信任本頁算出的值
         const to = norm(rec.to);
         if (to === here || !sameBook(to)) return '';
@@ -328,6 +391,7 @@
         const appended = new Set();
         let currentUrl = norm(startUrl);
         let nextAfterUrl = null;
+        let reachedEnd = false;
 
         for (let i = 0; i < count; i++) {
             if (aborted) return;                   // [修#7]
@@ -340,21 +404,23 @@
 
             const doc = new DOMParser().parseFromString(html, 'text/html');
             const content = doc.querySelector(SITE.contentSelector);
-            const titleEl = doc.querySelector('h1');
-            if (!content || !titleEl) { console.warn('⚠️ 找不到內容或標題，停止'); break; }
+            const titleEl = doc.querySelector(SITE.titleSelector);
+            const title = (titleEl ? (titleEl.textContent || '') : '').trim()
+                || (doc.title || '').trim();
+            if (!content || !title) { console.warn('⚠️ 找不到內容或標題，停止'); break; }
 
             const next = findNextLink(doc);
             const href = next && next.getAttribute('href');
             let nextUrl = '';
             if (href && href !== '#' && !/^javascript/i.test(href)) {
-                const nu = norm(href);
-                if (nu !== currentUrl && nu !== here) nextUrl = nu;  // 自指/回指防護
+                const nu = norm(href, currentUrl);                  // 以被抓取頁為 base 解析相對路徑
+                if (nu !== currentUrl && nu !== here && sameBook(nu)) nextUrl = nu;  // 自指/回指/跨書防護
             }
-            appendChapter(currentUrl, titleEl.innerText.trim(), content.innerHTML, nextUrl);
+            appendChapter(currentUrl, title, sanitizeContent(content), nextUrl);
             appended.add(currentUrl);
-            console.log('📖 已載入:', titleEl.innerText.trim());
+            console.log('📖 已載入:', title);
 
-            if (!nextUrl) { console.log('🚫 沒有更多章節'); break; }
+            if (!nextUrl) { console.log('🚫 沒有更多章節'); reachedEnd = true; nextAfterUrl = null; break; }
             nextAfterUrl = nextUrl;
             currentUrl = nextUrl;
         }
@@ -363,6 +429,11 @@
             publishNext(nextAfterUrl);
             continueUrl = nextAfterUrl;
             setNextBatchItem(nextAfterUrl);
+        } else if (reachedEnd) {
+            // [MINOR-A] 正常讀到書末：清掉續讀點，避免「再預讀」重抓同一批
+            continueUrl = null;
+            setNextBatchItem(null);
+            console.log('✅ 已到書末');
         } else {
             console.warn('⚠️ 預讀未完整結束，續讀點維持原值（可再按「再預讀」重試）');
         }
@@ -385,11 +456,20 @@
 
     /* ===== 攔截「下一章」點擊（只在有效目標時攔截） ===== */
     function isNextLinkClick(e) {
+        // 修飾鍵點擊（新分頁/新視窗）不攔截，只處理普通左鍵
+        if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return false;
         const t = e.target instanceof Element ? e.target : null;
         if (!t) return false;
-        if (SITE.nextLinkSelector) return !!t.closest(SITE.nextLinkSelector);
-        const a = t.closest('a');
-        return !!a && /下一[章頁页]/.test(a.textContent || '');
+        const a = t.closest('a[href]');
+        if (!a) return false;
+        const live = findNextLink(document);
+        if (!live) return false;
+        if (live === a || live.contains(a)) return true;
+        // [MAJOR-1] 解析後 href 相同也視為下一章——twkan 等站有上下兩組導航列指向同一目標，
+        // 只按節點身分攔截會漏掉另一組；比對 href 則兩組都攔，且不會誤攔目錄分頁等其他連結
+        const lh = live.getAttribute('href');
+        const ah = a.getAttribute('href');
+        return !!lh && !!ah && norm(lh) === norm(ah);
     }
     document.addEventListener('click', (e) => {
         if (!isNextLinkClick(e)) return;
@@ -402,10 +482,10 @@
     }, true);
 
     function start() {
-        const h1 = document.querySelector('h1');
+        const titleEl = document.querySelector(SITE.titleSelector);
         const nextLink = findNextLink(document);
         const href = nextLink && nextLink.getAttribute('href');
-        if (h1) addNavItem(h1.innerText.trim(), h1);
+        if (titleEl) addNavItem((titleEl.textContent || '').trim(), titleEl);
 
         if (!href || href === '#' || /^javascript/i.test(href)) {
             console.warn('❌ 下一章連結無效'); return;
@@ -418,7 +498,10 @@
             container.dataset.uuSeq = '0';
             io.observe(container);
         }
-        continueUrl = norm(href);                  // [修#5] 先初始化：首輪失敗仍可重試
+        // [m-1] 書末章的「下一章」常指向目錄頁 → 不設續讀點，避免首輪去抓目錄
+        const cu = norm(href);
+        if (!sameBook(cu)) { console.log('🚫 下一章連結非同書章節（可能已是最後一章）'); return; }
+        continueUrl = cu;                          // [修#5] 先初始化：首輪失敗仍可重試
         setNextBatchItem(continueUrl);
         runPreload(continueUrl, MAX_NEXT);
     }

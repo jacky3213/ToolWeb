@@ -89,6 +89,7 @@
     "summary": "預讀10章、閱讀進度智慧跳轉、右側導航面板、防重複/節流/重試/中斷保護（支援 uukanshu.cc 與 twkan.com）",
     "description": "預讀10章、閱讀進度智慧跳轉、右側導航面板、防重複/節流/重試/中斷保護。支援站台：uukanshu.cc、twkan.com（台灣小說網）。",
     "changelog": [
+      "v2.3: 三輪 DeepSeek 審查收斂——跨站進度隔離、雙導航列攔截、回讀保護、注入內容清洗",
       "v2.1: 新增支援 twkan.com（台灣小說網 /txt/ 章節頁），自動辨識下一章連結",
       "自 GitHub Raw 自動同步加載"
     ],
