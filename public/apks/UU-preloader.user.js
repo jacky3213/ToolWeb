@@ -1,16 +1,20 @@
 // ==UserScript==
 // @name         UU看書自動預讀 10 章 (完備版)
 // @namespace    https://github.com/jacky3213
-// @version      2.0
+// @version      2.1
 // @updateURL    https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/UU-preloader.user.js
 // @downloadURL  https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/UU-preloader.user.js
-// @description  預讀10章、閱讀進度智慧跳轉、右側導航面板、防重複/節流/重試/中斷保護
+// @description  預讀10章、閱讀進度智慧跳轉、右側導航面板、防重複/節流/重試/中斷保護（支援 uukanshu.cc 與 twkan.com）
 // @author       K7
 // @match        https://uukanshu.cc/book/*/*
+// @match        https://twkan.com/txt/*/*
+// @match        https://www.twkan.com/txt/*/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @connect      uukanshu.cc
+// @connect      twkan.com
+// @connect      www.twkan.com
 // @run-at       document-end
 // @noframes
 // ==/UserScript==
@@ -21,8 +25,35 @@
     const CHAPTER_DELAY = 1000;
     const MAX_RETRY = 3;
     const VISIT_WINDOW = 48 * 60 * 60 * 1000; // 「看過」紀錄保留 48 小時
-    const contentSelector = '.readcotent.bbb.font-normal';
-    const nextLinkSelector = '#linkNext';
+
+    /* ===== 站點配置：uukanshu.cc 與 twkan.com（69shu 家族模板） ===== */
+    const SITES = {
+        'uukanshu.cc': {
+            bookIdRe: /^\/book\/([^/]+)/,
+            bookPrefix: '/book/',
+            contentSelector: '.readcotent.bbb.font-normal',
+            nextLinkSelector: '#linkNext',
+            nextByText: false,
+        },
+        'twkan.com': {
+            bookIdRe: /^\/txt\/([^/]+)/,
+            bookPrefix: '/txt/',
+            contentSelector: '#txtcontent0, #txtcontent',
+            nextLinkSelector: null,          // 無固定 id → 以連結文字辨識
+            nextByText: true,
+        },
+    };
+    const SITE = SITES[location.hostname.replace(/^www\./, '')] || SITES['uukanshu.cc'];
+
+    // 取得「下一章」連結：優先用站點選擇器，twkan 以連結文字（下一章/下一頁）辨識
+    function findNextLink(rootDoc) {
+        const doc = rootDoc || document;
+        if (SITE.nextLinkSelector) return doc.querySelector(SITE.nextLinkSelector);
+        for (const a of doc.querySelectorAll('a')) {
+            if (/下一[章頁页]/.test(a.textContent || '')) return a;
+        }
+        return null;
+    }
 
     /* ===== [修#2] 全腳本唯一的 URL 規範化 ===== */
     const norm = (u) => {
@@ -30,10 +61,10 @@
         catch (e) { return String(u || '').split('#')[0]; }
     };
     const here = norm(location.href);
-    const bookId = (location.pathname.match(/^\/book\/([^/]+)/) || [])[1];
+    const bookId = (location.pathname.match(SITE.bookIdRe) || [])[1];
     if (!bookId) return;
     const sameBook = (u) => {
-        try { return new URL(u, location.href).pathname.startsWith('/book/' + bookId + '/'); }
+        try { return new URL(u, location.href).pathname.startsWith(SITE.bookPrefix + bookId + '/'); }
         catch (e) { return false; }
     };
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -227,7 +258,7 @@
     /* ===== [修#6] 先查後插，以規範化 URL 為唯一身分 ===== */
     const insertedKeys = new Set();
     function appendChapter(url, title, innerHTML, nextUrl) {
-        const container = document.querySelector(contentSelector);
+        const container = document.querySelector(SITE.contentSelector);
         if (!container) return false;
         const key = norm(url);
         if (key === here || insertedKeys.has(key)) return true;
@@ -308,11 +339,11 @@
             if (!html) break;                      // currentUrl 未載入 → 不在 appended
 
             const doc = new DOMParser().parseFromString(html, 'text/html');
-            const content = doc.querySelector(contentSelector);
+            const content = doc.querySelector(SITE.contentSelector);
             const titleEl = doc.querySelector('h1');
             if (!content || !titleEl) { console.warn('⚠️ 找不到內容或標題，停止'); break; }
 
-            const next = doc.querySelector(nextLinkSelector);
+            const next = findNextLink(doc);
             const href = next && next.getAttribute('href');
             let nextUrl = '';
             if (href && href !== '#' && !/^javascript/i.test(href)) {
@@ -353,9 +384,15 @@
     moreBtn.addEventListener('click', () => runPreload(continueUrl, MAX_NEXT));
 
     /* ===== 攔截「下一章」點擊（只在有效目標時攔截） ===== */
+    function isNextLinkClick(e) {
+        const t = e.target instanceof Element ? e.target : null;
+        if (!t) return false;
+        if (SITE.nextLinkSelector) return !!t.closest(SITE.nextLinkSelector);
+        const a = t.closest('a');
+        return !!a && /下一[章頁页]/.test(a.textContent || '');
+    }
     document.addEventListener('click', (e) => {
-        const a = e.target.closest(nextLinkSelector);
-        if (!a) return;
+        if (!isNextLinkClick(e)) return;
         const jump = clickJumpTarget();
         if (jump) {
             e.preventDefault();
@@ -366,7 +403,7 @@
 
     function start() {
         const h1 = document.querySelector('h1');
-        const nextLink = document.querySelector(nextLinkSelector);
+        const nextLink = findNextLink(document);
         const href = nextLink && nextLink.getAttribute('href');
         if (h1) addNavItem(h1.innerText.trim(), h1);
 
@@ -374,7 +411,7 @@
             console.warn('❌ 下一章連結無效'); return;
         }
         // 本頁自身章節納入進度偵測（seq = 0）
-        const container = document.querySelector(contentSelector);
+        const container = document.querySelector(SITE.contentSelector);
         if (container) {
             container.dataset.uuUrl = here;
             container.dataset.uuNext = norm(href);
