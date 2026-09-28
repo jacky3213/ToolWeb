@@ -282,7 +282,11 @@
          [C1] contentSelector 可能含逗號（#txtcontent0, #txtcontent），逗號是最低優先運算符，
          必須逐段補 html.uu-night 前綴，否則右半邊會變成無條件的全域規則（日間也生效） */
       html.uu-night body{background:#16161c !important;color:#c9c9d4 !important}
-      html.uu-night ${SITE.contentSelector.split(',').map(s => 'html.uu-night ' + s.trim()).join(',')}{background-color:#16161c !important;color:#c9c9d4 !important}
+      html.uu-night ${SITE.contentSelector.split(',').map(s => 'html.uu-night ' + s.trim()).join(',')}{background:#16161c !important;color:#c9c9d4 !important}
+      /* [v3.1] 站方常把白底設在正文外層的包裝容器上（#chaptercontent/.container 等），
+         只調 body 會變成「外面黑、正文區塊仍白」。applyReading() 會把正文祖先鏈標記
+         .uu-night-anc，這裡用 background 簡寫（連背景圖/漸層一併覆蓋）調黑整條鏈 */
+      html.uu-night .uu-night-anc{background:#16161c !important;color:#c9c9d4 !important;border-color:#2a2a33 !important}
       html.uu-night ${SITE.contentSelector.split(',').map(s => 'html.uu-night ' + s.trim()).join(',')} *:not(img):not(video):not(a):not(a *){color:#c9c9d4 !important;background-color:transparent !important;border-color:#2a2a33 !important;box-shadow:none !important;text-shadow:none !important}   /* [M2/MAJOR-1] a 及其後代自 * 規則豁免，連結色才會生效 */
       html.uu-night ${SITE.contentSelector.split(',').map(s => 'html.uu-night ' + s.trim()).join(',')} a{color:#7fb3ff !important}   /* [M2] 連結色 */
       html.uu-night ${SITE.contentSelector.split(',').map(s => 'html.uu-night ' + s.trim()).join(',')} .uu-preload{border-top-color:#555 !important}          /* [M5] inline 邊框被 * 規則蓋掉，補回章節分隔線（含 nightSel 提升特異度） */
@@ -359,6 +363,18 @@
     document.head.appendChild(readingStyle);
     function applyReading() {
         document.documentElement.classList.toggle('uu-night', !!readCfg.night);
+        // [v3.1] 夜間模式：把正文元素的祖先鏈（到 body 為止）標記 .uu-night-anc，
+        // 讓包裝容器（#chaptercontent/.container 等）也一併調黑；關閉時移除所有標記。
+        // 每次切換都重算，避免 SPA 重建 DOM 後標記殘留或失效。
+        document.querySelectorAll('.uu-night-anc').forEach(el => el.classList.remove('uu-night-anc'));
+        if (readCfg.night) {
+            let el = null;
+            try { el = document.querySelector(SITE.contentSelector); } catch (e) {}
+            while (el && el !== document.body) {
+                el.classList.add('uu-night-anc');
+                el = el.parentElement;
+            }
+        }
         let css = '';
         if (readCfg.fz > 0) css += SITE.contentSelector + '{font-size:' + readCfg.fz + 'px !important;}';
         if (readCfg.lh > 0) css += SITE.contentSelector + '{line-height:' + readCfg.lh + ' !important;}';
