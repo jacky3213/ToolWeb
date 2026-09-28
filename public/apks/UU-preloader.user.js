@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說預讀器 (Novel Preloader)
 // @namespace    https://github.com/jacky3213
-// @version      3.0
+// @version      3.1
 // @updateURL    https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/UU-preloader.user.js
 // @downloadURL  https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/UU-preloader.user.js
 // @description  預讀章數可調（5–30）、無縫滾動連載、閱讀模式（夜間/字級/行距）、鍵盤快捷鍵（←/→/P）、進度智慧跳轉、右側導航面板（支援 uukanshu.cc、twkan.com 及 69shu 家族鏡像站自動偵測；@connect * 僅用於同站章節抓取）
