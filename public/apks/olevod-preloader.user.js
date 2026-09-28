@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Olevod 影片預載器 (Video Preloader)
 // @namespace    https://github.com/jacky3213
-// @version      1.3.0
+// @version      1.3.1
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/olevod-preloader.user.js
 // @downloadURL  https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/olevod-preloader.user.js
@@ -22,6 +22,12 @@
  * 安裝方式：
  * 1. 開啟 Tampermonkey 管理面板 → 「+」新增腳本 → 貼上本檔全部內容 → 儲存 (Ctrl+S)
  * 2. 重新整理 Olevod / Gimy 影片頁，播放器右下角會出現「⚡ 預載」小面板
+ *
+ * v1.3.1 修復：
+ * - Gimy 預載偶爾卡在「等待播放清單」：iframe 內注入時機晚於 hls.js 首次 m3u8 請求時，
+ *   攔截層會錯過 manifest；新增主動偵測 fallback（從頁面內容找出 m3u8 直接解析），
+ *   並支援以 arraybuffer 回應的 manifest 解碼
+ * - 片源測速面板改為右下角固定浮動面板，可收合為小圓點，不再佔用頁面排版
  *
  * v1.3.0 功能（Gimy 支援）：
  * - 支援 Gimy 劇迷家族（gimytv.io / gimytw.cc / gimy.tw / gimy.com 及 gimy* 分站）
@@ -58,7 +64,7 @@
   window.__olevodPreloaderActive = true;
 
   // 診斷日誌：在 Console 看到「injected」代表腳本已成功注入
-  console.info('%c[Video Preloader] v1.3.0 injected @ ' + location.href, 'color:#38bdf8;font-weight:bold');
+  console.info('%c[Video Preloader] v1.3.1 injected @ ' + location.href, 'color:#38bdf8;font-weight:bold');
 
   /* ===================== 站點與角色偵測 ===================== */
   const HOST = location.hostname;
@@ -237,7 +243,10 @@
     const segs = parseMedia(text, url);
     if (!segs.length) return;
     const tl = buildTimeline(segs);
-    session.playlists.set(url, { url, segs, starts: tl.starts, total: tl.total, next: 0 });
+    const prev = session.playlists.get(url);
+    // 分片數一致才沿用進度（清單內容變更時歸零，避免預載空洞）
+    const keepNext = prev && prev.segs.length === segs.length ? prev.next : 0;
+    session.playlists.set(url, { url, segs, starts: tl.starts, total: tl.total, next: keepNext });
     for (const s of segs) session.segSet.add(s.url);
     console.info('[Video Preloader] 偵測到播放清單:', url, '→', segs.length, '個分片,', Math.round(tl.total / 60), '分鐘');
     noticeRestore(segs);
@@ -259,7 +268,7 @@
   }
 
   function fetchPlaylistQuietly(url) {
-    origFetch(url).then(r => r.ok ? r.text() : '')
+    return origFetch(url).then(r => r.ok ? r.text() : '')
       .then(t => { if (t) handlePlaylist(url, t); })
       .catch(() => {});
   }
@@ -377,6 +386,68 @@
   }
 
   if (PLAY_ROLE) setInterval(tick, TICK_MS);
+
+  /* ===================== 主動偵測播放清單（fallback） ===================== */
+  // Tampermonkey 在 iframe 內不保證 document-start 注入；若注入晚於 hls.js 的首次
+  // m3u8 請求，攔截層會永遠錯過 manifest（症狀：面板停在「等待播放清單…」）。
+  // 因此 session 遲遲未建立時，改從頁面本身（inline script 的 var url='...m3u8' 等）
+  // 主動找出 m3u8 並抓取解析；後續分片攔截不受注入時機影響
+  //（prototype 方法在呼叫當下才解析，晚裝的 hook 仍攔得到之後的分片請求）。
+  function scanM3u8InDocument() {
+    try {
+      // 支援絕對 / 協議相對 / 根相對路徑；先還原 JS/JSON 常見的 \/ 轉義再比對
+      // 尾端 lookahead 防止 foo.m3u8x 被截成 foo.m3u8
+      const re = /((?:https?:\/\/|\/\/|\/)[^\s"'<>()\\]+?\.m3u8(?:\?[^\s"'<>()\\]*)?)(?=[\s"'<>()\\]|$)/i;
+      for (const s of document.querySelectorAll('script')) {
+        const t = (s.textContent || '').replace(/\\\//g, '/');
+        if (t.length < 20 || t.length > 200000) continue;
+        const m = t.match(re);
+        if (m) return m[1];
+      }
+      // 退回：掃整份文件（HTML 屬性中的 & 會被序列化為 &amp;，需還原）
+      const raw = document.documentElement.innerHTML || '';
+      if (raw.length > 1500000) return null;
+      const html = raw.replace(/\\\//g, '/');
+      const m2 = html.match(re);
+      if (m2) return m2[1].replace(/&amp;/g, '&');
+      return null;
+    } catch (e) { return null; }
+  }
+
+  // 僅 Gimy 播放器 iframe 需要 fallback（頁面 HTML 本身就含 m3u8）；
+  // olevod 由 document-start 攔截層正常偵測，不跑此路徑以避免誤建 session
+  if (ROLE === 'player') {
+    let discoverBusy = false;
+    let discoverDelay = 2000;
+    let discoverStopped = false;
+    const discoverStop = () => { discoverStopped = true; };
+    const discoverOnce = () => {
+      try {
+        if (discoverStopped) return;
+        // 已偵測到實際播放清單（含 media 層）即停止
+        if (session && session.playlists.size) { discoverStop(); return; }
+        if (discoverBusy || document.readyState === 'loading') { setTimeout(discoverOnce, discoverDelay); return; }
+        const u = scanM3u8InDocument();
+        if (!u) { setTimeout(discoverOnce, discoverDelay); return; }
+        const abs = resolveUrl(location.href, u);
+        // 重複呼叫安全：master/media 已存在時 handlePlaylist 不會重建 session
+        discoverBusy = true;
+        fetchPlaylistQuietly(abs).finally(() => {
+          discoverBusy = false;
+          if (session && session.playlists.size) { discoverStop(); return; }
+          discoverDelay = Math.min(discoverDelay + 1000, 10000); // 失敗退避
+          setTimeout(discoverOnce, discoverDelay);
+        });
+      } catch (e) {
+        discoverBusy = false;
+        discoverDelay = Math.min(discoverDelay + 1000, 10000); // 異常路徑同樣退避
+        if (!discoverStopped) setTimeout(discoverOnce, discoverDelay);
+      }
+    };
+    setTimeout(discoverOnce, discoverDelay);
+    // 120 秒後停止掃描（正常情況早就偵測到了，避免無謂消耗）
+    setTimeout(discoverStop, 120000);
+  }
 
   /* ===================== Gimy 播放上下文（postMessage） ===================== */
 
@@ -840,8 +911,13 @@
         if (M3U8_RE.test(url)) {
           xhr.addEventListener('load', () => {
             try {
-              const text = xhr.responseType === '' || xhr.responseType === 'text'
-                ? xhr.responseText : '';
+              let text = '';
+              if (xhr.responseType === '' || xhr.responseType === 'text') {
+                text = xhr.responseText;
+              } else if (xhr.responseType === 'arraybuffer' && xhr.response) {
+                // 部分播放器以 arraybuffer 抓 manifest，解碼為文字再解析
+                try { text = new TextDecoder('utf-8').decode(new Uint8Array(xhr.response)); } catch (e) {}
+              }
               if (text) handlePlaylist(url, text);
             } catch (e) {}
           });
@@ -1412,6 +1488,7 @@
         x.r.label + '~' + x.r.status + '~' + x.r.mbps + '~' + x.r.ttfbMs + '~' + x.r.host).join(';');
       if (sig === lastSpeedSig) return;
       lastSpeedSig = sig;
+      const scrollTop = listEl.scrollTop; // 重繪後還原捲動位置，避免測速中列表跳動
       listEl.innerHTML = rows.map((x) => {
         const r = x.r;
         const label = String(r.label || '');
@@ -1437,6 +1514,7 @@
           <span style="color:${color}">${badge}</span>
         </div>`;
       }).join('');
+      listEl.scrollTop = scrollTop;
       const summary = panel.querySelector('#gs-summary');
       if (summary) {
         summary.textContent = speedState.running
@@ -1452,36 +1530,59 @@
     } catch (e) {}
   }
 
+  // 收合狀態（宣告於 mountSpeedPanel 之前，避免 TDZ 風險）
+  let speedCollapsed = false;
+
   function mountSpeedPanel() {
     try {
-      if (document.getElementById('gimy-speed-panel')) { speedPanelMounted = true; return; }
+      const pExist = document.getElementById('gimy-speed-panel');
+      const dExist = document.getElementById('gimy-speed-dot');
+      if (pExist && dExist) { speedPanelMounted = true; return; }
+      // 殘缺狀態（只剰 panel 或只剰 dot）：清掉殘缺的半邊，重新完整建立
+      if (pExist) pExist.remove();
+      if (dExist) dExist.remove();
       const tabs = currentTabs();
       if (!tabs.length) return;
-      const anchor = tabs[0].closest && (tabs[0].closest('.details-play-title') || tabs[0].parentElement);
+      // 固定浮動面板（右下角），不佔用頁面排版位置；可收合為小圓點
       const panel = document.createElement('div');
       panel.id = 'gimy-speed-panel';
       panel.style.cssText = [
-        'margin:10px 0', 'padding:10px 12px', 'border-radius:10px',
-        'background:rgba(20,24,32,.92)', 'color:#e8eaf0',
+        'position:fixed', 'right:16px', 'bottom:16px', 'z-index:2147483647',
+        'width:300px', 'max-width:calc(100vw - 32px)',
+        'padding:10px 12px', 'border-radius:10px',
+        'background:rgba(20,24,32,.94)', 'color:#e8eaf0',
         'font:12px/1.6 -apple-system,"Segoe UI","Microsoft JhengHei",sans-serif',
-        'box-shadow:0 4px 16px rgba(0,0,0,.25)', 'user-select:none'
+        'box-shadow:0 4px 16px rgba(0,0,0,.4)', 'user-select:none'
       ].join(';');
       panel.innerHTML = `
         <div style="display:flex;align-items:center;gap:8px;font-weight:600;margin-bottom:4px">
           <span>🚀 片源測速</span>
-          <span id="gs-summary" style="flex:1;font-weight:400;color:#9aa3b2"></span>
+          <span id="gs-summary" style="flex:1;font-weight:400;color:#9aa3b2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+          <button id="gs-collapse" style="all:unset;cursor:pointer;color:#9aa3b2;padding:0 4px" title="收合為小圓點">—</button>
+        </div>
+        <div id="gs-list" style="max-height:42vh;overflow-y:auto"></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">
           <label style="display:flex;align-items:center;gap:4px;font-weight:400;color:#9aa3b2;cursor:pointer">
             <input type="checkbox" id="gs-auto" ${LS.get(LS_AUTO_FAST, '0') === '1' ? 'checked' : ''}> 自動選最快
           </label>
-          <button id="gs-retest" style="all:unset;cursor:pointer;padding:2px 8px;border-radius:6px;background:#31394a;color:#e8eaf0" title="重新測速">↻</button>
-        </div>
-        <div id="gs-list"></div>`;
-      if (anchor && anchor.parentElement) {
-        anchor.insertAdjacentElement('afterend', panel);
-      } else {
-        document.body.appendChild(panel);
-      }
+          <button id="gs-retest" style="all:unset;cursor:pointer;padding:2px 8px;border-radius:6px;background:#31394a;color:#e8eaf0" title="重新測速">↻ 重新測速</button>
+        </div>`;
+      const speedDot = document.createElement('div');
+      speedDot.id = 'gimy-speed-dot';
+      speedDot.title = '片源測速（點擊展開）';
+      speedDot.style.cssText = [
+        'position:fixed', 'right:16px', 'bottom:16px', 'z-index:2147483647',
+        'width:32px', 'height:32px', 'border-radius:50%', 'display:none',
+        'background:linear-gradient(135deg,#3b82f6,#22d3ee)', 'color:#fff',
+        'font-size:15px', 'text-align:center', 'line-height:32px', 'cursor:pointer',
+        'box-shadow:0 4px 12px rgba(0,0,0,.4)', 'user-select:none'
+      ].join(';');
+      speedDot.textContent = '🚀';
+      document.body.appendChild(panel);
+      document.body.appendChild(speedDot);
+      if (speedCollapsed) applySpeedCollapsed();
       panel.addEventListener('click', (e) => {
+        if (e.target.id === 'gs-collapse') { setSpeedCollapsed(true); return; }
         if (e.target.id === 'gs-retest') {
           try { sessionStorage.removeItem(speedCacheKey()); } catch (err) {}
           runSpeedTest(currentTabs()).catch(() => {});
@@ -1490,6 +1591,7 @@
         const row = e.target.closest && e.target.closest('.gs-row');
         if (row && row.dataset.idx != null) switchToLabel(parseInt(row.dataset.idx, 10));
       });
+      speedDot.addEventListener('click', () => setSpeedCollapsed(false));
       panel.addEventListener('change', (e) => {
         if (e.target.id === 'gs-auto') {
           LS.set(LS_AUTO_FAST, e.target.checked ? '1' : '0');
@@ -1502,6 +1604,19 @@
     } catch (e) {}
   }
 
+  function setSpeedCollapsed(c) {
+    speedCollapsed = c;
+    applySpeedCollapsed();
+  }
+  function applySpeedCollapsed() {
+    try {
+      const panel = document.getElementById('gimy-speed-panel');
+      const dot = document.getElementById('gimy-speed-dot');
+      if (panel) panel.style.display = speedCollapsed ? 'none' : 'block';
+      if (dot) dot.style.display = speedCollapsed ? 'block' : 'none';
+    } catch (e) {}
+  }
+
   if (ROLE === 'main' && IS_GIMY) {
     let speedBootstrapped = false;
     // 常駐守護：面板被站方重繪移除時自動重掛（沿用既有測速結果，不重測）
@@ -1510,7 +1625,7 @@
         if (!/^\/eps\//.test(location.pathname)) return;
         const tabs = currentTabs();
         if (!tabs.length) return;
-      if (!document.getElementById('gimy-speed-panel')) {
+      if (!document.getElementById('gimy-speed-panel') || !document.getElementById('gimy-speed-dot')) {
         mountSpeedPanel();
         if (!speedPanelMounted) return;
       }
