@@ -77,7 +77,7 @@
   },
   {
     "id": "uu-preloader",
-    "name": "UU看書自動預讀 10 章 (完備版)",
+    "name": "小說預讀器 (Novel Preloader)",
     "packageName": "https://github.com/jacky3213",
     "version": "v2.0",
     "versionCode": 100,

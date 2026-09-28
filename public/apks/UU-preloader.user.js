@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         UU看書自動預讀 10 章 (完備版)
+// @name         小說預讀器 (Novel Preloader)
 // @namespace    https://github.com/jacky3213
-// @version      2.3
+// @version      2.4
 // @updateURL    https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/UU-preloader.user.js
 // @downloadURL  https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/UU-preloader.user.js
 // @description  預讀10章、閱讀進度智慧跳轉、右側導航面板、防重複/節流/重試/中斷保護（支援 uukanshu.cc 與 twkan.com）
