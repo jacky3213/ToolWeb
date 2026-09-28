@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說預讀器 (Novel Preloader)
 // @namespace    https://github.com/jacky3213
-// @version      3.1
+// @version      3.2
 // @updateURL    https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/UU-preloader.user.js
 // @downloadURL  https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/UU-preloader.user.js
 // @description  預讀章數可調（5–30）、無縫滾動連載、閱讀模式（夜間/字級/行距）、鍵盤快捷鍵（←/→/P）、進度智慧跳轉、右側導航面板（支援 uukanshu.cc、twkan.com 及 69shu 家族鏡像站自動偵測；@connect * 僅用於同站章節抓取）
@@ -298,7 +298,6 @@
     panel.id = 'uu-nav-panel';
     panel.innerHTML = `
       <div id="uu-nav-header"><span>章節目錄</span><span id="uu-nav-toggle">–</span></div>
-      <ul id="uu-nav-list"></ul>
       <div id="uu-nav-reading">
         <button id="uu-read-night" title="夜間模式">🌙</button>
         <button id="uu-read-fz-dec" title="縮小字級">A−</button>
@@ -310,6 +309,7 @@
         <span id="uu-count-val"></span>
         <button id="uu-count-inc" title="增加預讀章數">＋</button>
       </div>
+      <ul id="uu-nav-list"></ul>
       <button id="uu-nav-more"></button>`;
     document.body.appendChild(panel);
 
