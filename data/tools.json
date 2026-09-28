@@ -84,8 +84,8 @@
     "id": "uu-preloader",
     "name": "小說預讀器 (Novel Preloader)",
     "packageName": "https://github.com/jacky3213",
-    "version": "v3.2",
-    "versionCode": 102,
+    "version": "v3.3",
+    "versionCode": 103,
     "minSdk": "Tampermonkey (Chrome/Firefox/Edge)",
     "architecture": "universal",
     "fileSize": "16.6 KB",
@@ -94,6 +94,7 @@
     "summary": "預讀章數可調（5–30）、無縫滾動連載、閱讀模式（夜間/字級/行距）、鍵盤快捷鍵、進度智慧跳轉、右側導航面板",
     "description": "預讀章數可調（5–30）、無縫滾動連載、閱讀模式（夜間/字級/行距）、鍵盤快捷鍵（←/→/P）、閱讀進度智慧跳轉、右側導航面板。支援站台：uukanshu.cc、twkan.com（台灣小說網），以及 69shu 家族鏡像站自動偵測。",
     "changelog": [
+      "v3.3: 修復無法回讀——← 上一章不再被彈回最新預讀；長距離平滑捲動期間高亮不再被幾何計算搶回",
       "v3.2: 面板改版——夜間/字級/行距與預讀章數控制列移至頂部，章節目錄增長不再遮擋按鈕",
       "v3.1: 夜間模式修復——正文外層包裝容器（#chaptercontent 等）一併調黑，不再只有外圍變黑",
       "v3.0: 預讀章數可調（5–30）、無縫滾動連載、鍵盤快捷鍵（←/→/P）、69shu 家族鏡像站自動偵測、閱讀模式（夜間/字級/行距）",

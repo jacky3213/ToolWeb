@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說預讀器 (Novel Preloader)
 // @namespace    https://github.com/jacky3213
-// @version      3.2
+// @version      3.3
 // @updateURL    https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/UU-preloader.user.js
 // @downloadURL  https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/UU-preloader.user.js
 // @description  預讀章數可調（5–30）、無縫滾動連載、閱讀模式（夜間/字級/行距）、鍵盤快捷鍵（←/→/P）、進度智慧跳轉、右側導航面板（支援 uukanshu.cc、twkan.com 及 69shu 家族鏡像站自動偵測；@connect * 僅用於同站章節抓取）
@@ -198,6 +198,14 @@
             const nav = (performance.getEntriesByType && performance.getEntriesByType('navigation')) || [];
             if (nav[0] && nav[0].type === 'back_forward') return false;
         } catch (e) {}
+        // [v3.3] 站內刻意導航（← 上一章／頁面「上一章」連結）一律不彈回進度點。
+        // 舊規則只比對 referrer === prog.last，但 ← 導航的 referrer 是「當前章」，
+        // 且部分小說站設 no-referrer 時 referrer 為空，導致回讀被彈回最新預讀章。
+        try {
+            const bn = sessionStorage.getItem('uuBackNav');
+            if (bn && hostAgnostic(bn) === hostAgnostic(here)) { sessionStorage.removeItem('uuBackNav'); return false; }
+        } catch (e) {}
+        try { if (document.referrer && sameBook(document.referrer)) return false; } catch (e) {}
         let jumpedTo = null;
         try { jumpedTo = sessionStorage.getItem('uuJumpedTo'); } catch (e) {}
         if (jumpedTo && hostAgnostic(jumpedTo) === hostAgnostic(here)) {  // 剛跳來的 → 不再連環跳
@@ -458,7 +466,7 @@
         const li = e.target.closest('li');
         if (!li) return;
         const it = navItems.find(n => n.li === li);
-        if (it && it.el) it.el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (it && it.el) { kbdArm(it.el); it.el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }   // [v3.3] 目錄點擊同樣鎖幾何回寫
     });
     function addNavItem(title, el) {
         const li = document.createElement('li');
@@ -479,9 +487,25 @@
     let ticking = false;
     let activeIdx = -1;                        // [#4] 目前閱讀位置在 navItems 中的索引
     let kbdScrollLock = 0;                     // [#4 M-1] 程式發起平滑捲動期間，updateActive 不覆寫 activeIdx
+    let kbdTargetTop = null;                   // [v3.3] 本次程式捲動的目標 Y 座標
+    // [v3.3] 舊版固定鎖 900ms：長距離平滑捲動常超過 900ms，鎖過期後 updateActive 依當前幾何重算，
+    // 捲動初期命中「已滾到底＝視為末章」規則，activeIdx 被彈回最新預讀章 → 連按 ← 永遠爬不上去。
+    // 改為：未抵達目標（誤差 >60px）前持續鎖定（上限 2s 後備），抵達即解鎖正常計算。
+    function kbdArm(el) {
+        try { kbdTargetTop = el.getBoundingClientRect().top + window.scrollY; }
+        catch (e) { kbdTargetTop = null; }
+        kbdScrollLock = Date.now() + 2000;
+    }
+    function kbdLocked() {
+        if (Date.now() >= kbdScrollLock) { kbdTargetTop = null; return false; }
+        if (kbdTargetTop !== null && Math.abs(window.scrollY - kbdTargetTop) < 60) {
+            kbdScrollLock = 0; kbdTargetTop = null; return false;   // 已抵達 → 解鎖，讓幾何計算接手
+        }
+        return true;
+    }
     function updateActive() {
         ticking = false;
-        if (Date.now() < kbdScrollLock) return;    // [#4 M-1] 捲動動畫進行中：保留鍵盤導航的樂觀值，避免每幀被幾何計算改回舊值
+        if (kbdLocked()) return;               // [#4 M-1] 捲動動畫進行中：保留鍵盤導航的樂觀值，避免每幀被幾何計算改回舊值
         let active = null;
         let idx = -1;
         for (let i = 0; i < navItems.length; i++) {
@@ -833,7 +857,7 @@
             if (target <= navItems.length - 1) {
                 const it = navItems[target];
                 if (it && it.el) {
-                    kbdScrollLock = Date.now() + 900;    // [M-1] 動畫期間鎖定幾何回寫
+                    kbdArm(it.el);                       // [v3.3] 抵達導向鎖定（原 900ms 固定鎖）
                     it.el.scrollIntoView({ behavior: 'smooth', block: 'start' });
                     activeIdx = target;                  // [N1] 樂觀更新：連按不被 rAF 節流卡住
                     return true;
@@ -852,7 +876,7 @@
         if (activeIdx >= 1) {
             const it = navItems[activeIdx - 1];
             if (it && it.el) {
-                kbdScrollLock = Date.now() + 900;    // [M-1] 動畫期間鎖定幾何回寫
+                kbdArm(it.el);                           // [v3.3] 抵達導向鎖定（原 900ms 固定鎖）
                 it.el.scrollIntoView({ behavior: 'smooth', block: 'start' });
                 activeIdx = activeIdx - 1;               // [N1] 樂觀更新
                 return true;
@@ -865,11 +889,15 @@
                 /上一[章頁页]/.test((a.textContent || '').replace(/\s+/g, ''))));
         if (prevA) {
             const h = prevA.getAttribute('href');
-            if (h && h !== '#' && !/^javascript/i.test(h)) { location.href = norm(h); return true; }
+            if (h && h !== '#' && !/^javascript/i.test(h)) {
+                try { sessionStorage.setItem('uuBackNav', norm(h)); } catch (e) {}   // [v3.3] 標記回讀導航，落地時 landingJump 不彈回
+                location.href = norm(h); return true;
+            }
         }
         // 退回 uuProgress.last：僅當本頁正是 last 的「下一章」（前進後的頁），避免誤跳
         const prog = getMap('uuProgress')[bookKey];
         if (prog && prog.last && hostAgnostic(prog.next) === hostAgnostic(here) && sameBook(prog.last)) {
+            try { sessionStorage.setItem('uuBackNav', norm(prog.last)); } catch (e) {}   // [v3.3]
             location.href = prog.last; return true;
         }
         console.log('🚫 沒有上一章');
