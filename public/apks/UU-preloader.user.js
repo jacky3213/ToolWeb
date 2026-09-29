@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說預讀器 (Novel Preloader)
 // @namespace    https://github.com/jacky3213
-// @version      3.4
+// @version      3.5
 // @updateURL    https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/UU-preloader.user.js
 // @downloadURL  https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/UU-preloader.user.js
 // @description  預讀章數可調（5–30）、無縫滾動連載、閱讀模式（夜間/字級/行距）、鍵盤快捷鍵（←/→/P）、進度智慧跳轉、右側導航面板（支援 uukanshu.cc、twkan.com 及 69shu 家族鏡像站自動偵測；@connect * 僅用於同站章節抓取）
@@ -250,6 +250,7 @@
     let lastBatchAppended = 0;                 // [#2 M-1] 上批實際插入章數（0 = 無進度，不自動接力）
     let lastBatchFailed = false;               // [整合 m4] 上批失敗旗標：失敗提示不被 renderCount 覆寫
     let blockReason = '';                      // [v3.4] 無法預讀的原因（面板可見；手機看不到 console）
+    let lastFetchNote = '';                    // [v3.5] 上批抓取失敗的具體原因（顯示在重試按鈕上）
 
     /* ===== 導航面板 ===== */
     const style = document.createElement('style');
@@ -354,7 +355,7 @@
             : bookEnded ? '✅ 已到書末'
             : blockReason ? blockReason
             : !continueUrl ? '— 無更多章節'
-            : (lastBatchFailed ? '⚠️ 預讀失敗，點此重試' : '＋ 再預讀 ' + preloadCount + ' 章');
+            : (lastBatchFailed ? ('⚠️ 預讀失敗' + (lastFetchNote ? '：' + lastFetchNote : '') + '，點此重試') : '＋ 再預讀 ' + preloadCount + ' 章');
     }
     countDecBtn.addEventListener('click', () => { setPreloadCount(preloadCount - 1); renderCount(); });
     countIncBtn.addEventListener('click', () => { setPreloadCount(preloadCount + 1); renderCount(); });
@@ -669,12 +670,17 @@
     async function getPage(url) {
         for (let attempt = 1; attempt <= MAX_RETRY; attempt++) {
             const r = await fetchOnce(url);
-            if (r.status === -4) return null;      // [v3.4] 環境不支援 GM_xmlhttpRequest，重試無意義
+            if (r.status === -4) { lastFetchNote = '環境不支援 GM_xmlhttpRequest'; return null; }   // [v3.4/v3.5]
             if (r.status === 200 && r.responseText) {
                 if (/Just a moment|cf-browser-verification|Enable JavaScript/i.test(r.responseText)) {
+                    lastFetchNote = '被 Cloudflare 驗證擋下';   // [v3.5]
                     console.warn(`🔒 第 ${attempt} 次收到 Cloudflare 驗證頁，等待重試...`);
                 } else return r.responseText;
             } else {
+                // [v3.5] 具體狀態上面板：403/404=反爬或連結失效、-1=連線失敗、-2=逾時
+                lastFetchNote = r.status === -1 ? '連線失敗（可能被攔截）'
+                    : r.status === -2 ? '請求逾時'
+                    : ('HTTP ' + r.status);
                 console.warn(`⚠️ 請求失敗 (HTTP ${r.status})，第 ${attempt}/${MAX_RETRY} 次重試:`, url);
             }
             if (attempt < MAX_RETRY) await sleep(attempt * 2000);
@@ -701,14 +707,18 @@
 
             const html = await getPage(currentUrl);
             if (aborted) return newCount;
-            if (!html) break;                      // currentUrl 未載入 → 不在 appended
+            if (!html) break;                      // currentUrl 未載入 → 不在 appended（原因已寫入 lastFetchNote）
 
             const doc = new DOMParser().parseFromString(html, 'text/html');
             const content = doc.querySelector(SITE.contentSelector);
             const titleEl = doc.querySelector(SITE.titleSelector);
             const title = (titleEl ? (titleEl.textContent || '') : '').trim()
                 || (doc.title || '').trim();
-            if (!content || !title) { console.warn('⚠️ 找不到內容或標題，停止'); break; }
+            if (!content || !title) {
+                // [v3.5] 手機版常見：正文由 JS 動態渲染，原始 HTML 裡是空的
+                lastFetchNote = content ? '抓到頁面但無標題' : '抓到頁面但解析不到正文（可能 JS 動態渲染）';
+                console.warn('⚠️ 找不到內容或標題，停止'); break;
+            }
 
             const next = findNextLink(doc);
             const href = next && next.getAttribute('href');
@@ -761,6 +771,7 @@
         try {
             const n = await fetchNextChapters(url, count);
             lastBatchAppended = n;                 // [#2 M-1] 供 armAutoPreload 判斷是否接力
+            if (n > 0) lastFetchNote = '';         // [v3.5] 成功即清除失敗註記
             lastBatchFailed = n === 0 && !bookEnded && !aborted;   // [整合 m4/MINOR-4]
             return n;
         }
