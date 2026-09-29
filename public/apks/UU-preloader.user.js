@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說預讀器 (Novel Preloader)
 // @namespace    https://github.com/jacky3213
-// @version      3.5
+// @version      3.6
 // @updateURL    https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/UU-preloader.user.js
 // @downloadURL  https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/UU-preloader.user.js
 // @description  預讀章數可調（5–30）、無縫滾動連載、閱讀模式（夜間/字級/行距）、鍵盤快捷鍵（←/→/P）、進度智慧跳轉、右側導航面板（支援 uukanshu.cc、twkan.com 及 69shu 家族鏡像站自動偵測；@connect * 僅用於同站章節抓取）
@@ -646,14 +646,30 @@
     }
 
     /* ===== 抓取（含重試、節流、inflight 管理） ===== */
-    function fetchOnce(url) {
+    // [v3.6] 抓取一律為同站請求 → 優先用頁面原生 fetch（帶完整 cookie/UA/Sec-Fetch，
+    // 與真人翻頁幾乎同特徵，可通過多數針對 GM_xmlhttpRequest 的 403 反爬）；
+    // 失敗（CSP 阻擋/403/401/429）再退回 GM_xmlhttpRequest。
+    async function fetchOnce(url) {
         // [#6 S1] 防禦性同站同書斷言：@connect * 全開下，任何未來新增的呼叫點都無法外洩任意 URL
-        if (norm(url) !== here && !sameBook(url)) return Promise.resolve({ status: -3, responseText: null });
+        if (norm(url) !== here && !sameBook(url)) return { status: -3, responseText: null };
+        // [v3.6] 原生 fetch 路徑（15s 逾時，同站帶憑證）
+        if (typeof fetch === 'function' && typeof AbortController === 'function') {
+            const ac = new AbortController();
+            const timer = setTimeout(() => ac.abort(), 15000);
+            try {
+                const resp = await fetch(url, { credentials: 'same-origin', redirect: 'follow', signal: ac.signal });
+                if (resp.ok) { clearTimeout(timer); return { status: 200, responseText: await resp.text() }; }
+                const st = resp.status;
+                clearTimeout(timer);
+                // 403/401/429 可能只針對非 GM 特徵的請求？相反情境也可能——退回 GM 試一次；其餘狀態碼直接回報
+                if (st !== 403 && st !== 401 && st !== 429) return { status: st, responseText: null };
+            } catch (e) { /* CSP/網路層阻擋或逾時 → 落到 GM */ }
+        }
         // [v3.4] 部分手機瀏覽器的腳本環境可能未提供 GM_xmlhttpRequest：明確回報而非拋未處理例外
         if (typeof GM_xmlhttpRequest !== 'function') {
             blockReason = '❌ 此環境無 GM_xmlhttpRequest，無法預讀';
             renderCount();
-            return Promise.resolve({ status: -4, responseText: null });
+            return { status: -4, responseText: null };
         }
         return new Promise((resolve) => {
             const req = GM_xmlhttpRequest({
