@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說預讀器 (Novel Preloader)
 // @namespace    https://github.com/jacky3213
-// @version      3.3
+// @version      3.4
 // @updateURL    https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/UU-preloader.user.js
 // @downloadURL  https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/UU-preloader.user.js
 // @description  預讀章數可調（5–30）、無縫滾動連載、閱讀模式（夜間/字級/行距）、鍵盤快捷鍵（←/→/P）、進度智慧跳轉、右側導航面板（支援 uukanshu.cc、twkan.com 及 69shu 家族鏡像站自動偵測；@connect * 僅用於同站章節抓取）
@@ -110,7 +110,12 @@
             /(^|\s)(next|nextchapter|next-chapter)(\s|$)/i.test(a.className || ''));
         if (byRel) return byRel;
         // 2) 後備：連結文字比對（去空白，避免「下 一章」或 <span> 分隔漏判）
-        return cands.find(a => /下一[章頁页节]/.test((a.textContent || '').replace(/\s+/g, ''))) || null;
+        // [v3.4] 放寬手機站常見變體：下章/下頁、英文 Next / Next Chapter/Page
+        const txt = (a) => (a.textContent || '').replace(/\s+/g, '');
+        return cands.find(a => /下一[章頁页节]/.test(txt(a)))
+            || cands.find(a => /^下[章页頁]$/.test(txt(a)))
+            || cands.find(a => /^next(\s*(chapter|page|→|»))?$/i.test(txt(a)))
+            || null;
     }
 
     /* ===== [修#2] 全腳本唯一的 URL 規範化（base 可指定被抓取頁的 URL） ===== */
@@ -244,6 +249,7 @@
     let bookEnded = false;                     // [#1 m-3] 書末狀態：moreBtn 顯示終態而非再預讀
     let lastBatchAppended = 0;                 // [#2 M-1] 上批實際插入章數（0 = 無進度，不自動接力）
     let lastBatchFailed = false;               // [整合 m4] 上批失敗旗標：失敗提示不被 renderCount 覆寫
+    let blockReason = '';                      // [v3.4] 無法預讀的原因（面板可見；手機看不到 console）
 
     /* ===== 導航面板 ===== */
     const style = document.createElement('style');
@@ -346,6 +352,7 @@
         moreBtn.disabled = loading || !canMore;
         moreBtn.textContent = loading ? '⏳ 載入中...'
             : bookEnded ? '✅ 已到書末'
+            : blockReason ? blockReason
             : !continueUrl ? '— 無更多章節'
             : (lastBatchFailed ? '⚠️ 預讀失敗，點此重試' : '＋ 再預讀 ' + preloadCount + ' 章');
     }
@@ -641,6 +648,12 @@
     function fetchOnce(url) {
         // [#6 S1] 防禦性同站同書斷言：@connect * 全開下，任何未來新增的呼叫點都無法外洩任意 URL
         if (norm(url) !== here && !sameBook(url)) return Promise.resolve({ status: -3, responseText: null });
+        // [v3.4] 部分手機瀏覽器的腳本環境可能未提供 GM_xmlhttpRequest：明確回報而非拋未處理例外
+        if (typeof GM_xmlhttpRequest !== 'function') {
+            blockReason = '❌ 此環境無 GM_xmlhttpRequest，無法預讀';
+            renderCount();
+            return Promise.resolve({ status: -4, responseText: null });
+        }
         return new Promise((resolve) => {
             const req = GM_xmlhttpRequest({
                 method: "GET", url: url,
@@ -656,6 +669,7 @@
     async function getPage(url) {
         for (let attempt = 1; attempt <= MAX_RETRY; attempt++) {
             const r = await fetchOnce(url);
+            if (r.status === -4) return null;      // [v3.4] 環境不支援 GM_xmlhttpRequest，重試無意義
             if (r.status === 200 && r.responseText) {
                 if (/Just a moment|cf-browser-verification|Enable JavaScript/i.test(r.responseText)) {
                     console.warn(`🔒 第 ${attempt} 次收到 Cloudflare 驗證頁，等待重試...`);
@@ -932,7 +946,9 @@
         updateActive();                            // [M3] 初始高亮 + activeIdx 就緒（含 start 提前 return 的路徑）
 
         if (!href || href === '#' || /^javascript/i.test(href)) {
-            console.warn('❌ 下一章連結無效'); return;
+            // [v3.4] 失敗原因上面板（手機無 console 可看）
+            blockReason = '⚠️ 未偵測到「下一章」連結';
+            console.warn('❌ 下一章連結無效'); renderCount(); return;
         }
         // 本頁自身章節納入進度偵測（seq = 0）
         const container = document.querySelector(SITE.contentSelector);
@@ -944,7 +960,10 @@
         }
         // [m-1] 書末章的「下一章」常指向目錄頁 → 不設續讀點，避免首輪去抓目錄
         const cu = norm(href);
-        if (!sameBook(cu)) { console.log('🚫 下一章連結非同書章節（可能已是最後一章）'); return; }
+        if (!sameBook(cu)) {
+            blockReason = '🚫 下一章非同書連結，無法預讀';
+            console.log('🚫 下一章連結非同書章節（可能已是最後一章）'); renderCount(); return;
+        }
         continueUrl = cu;                          // [修#5] 先初始化：首輪失敗仍可重試
         setNextBatchItem(continueUrl);
         runPreload(continueUrl, preloadCount);
