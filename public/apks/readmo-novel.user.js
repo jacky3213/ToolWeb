@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說傳書 (Novel → Readmoo)
 // @namespace    https://github.com/jacky3213
-// @version      0.1.10
+// @version      0.1.11
 // @updateURL     https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @downloadURL   https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @description  一鍵抓取整本小說 → 打包 EPUB → 自動上傳到 Readmoo (mooInk) 書櫃。全程在你的瀏覽器執行，繞過 Cloudflare / Cognito WAF 對伺服器 IP 的封鎖。
@@ -12,6 +12,8 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @connect      api.readmoo.com
+// @connect      amazonaws.com
 // @connect      *
 // @require      https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js
 // @require      https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js
@@ -162,7 +164,7 @@
                 binary: !!opt.binary,
                 timeout: opt.timeout || 60000,
                 onload: (r) => resolve({ status: r.status, text: r.responseText, raw: r.response }),
-                onerror: (e) => reject(new Error('GM 請求失敗')),
+                onerror: (e) => reject(new Error('GM 請求失敗（可能是跨域授權被拒，請在 Tampermonkey 彈窗中點「允許」）')),
                 ontimeout: () => reject(new Error('逾時')),
             });
         });
