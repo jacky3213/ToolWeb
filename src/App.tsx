@@ -8,7 +8,6 @@ import { ToolDetailModal } from './components/ToolDetailModal';
 import { AddToolModal } from './components/AddToolModal';
 import { InstallGuideModal } from './components/InstallGuideModal';
 import { AdminPasscodeModal } from './components/AdminPasscodeModal';
-import { ReadmoImportModal } from './components/ReadmoImportModal';
 import { VersionBadge } from './components/VersionBadge';
 
 export function App() {
@@ -33,7 +32,6 @@ export function App() {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isInstallGuideOpen, setIsInstallGuideOpen] = useState(false);
   const [isSyncingDrive, setIsSyncingDrive] = useState(false);
-  const [isReadmoOpen, setIsReadmoOpen] = useState(false);
 
   // Notification Toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -230,7 +228,6 @@ export function App() {
         onOpenInstallGuide={() => setIsInstallGuideOpen(true)}
         onOpenAdminModal={() => setIsAdminModalOpen(true)}
         onSyncDrive={handleSyncDrive}
-        onOpenReadmoImport={() => setIsReadmoOpen(true)}
         isSyncingDrive={isSyncingDrive}
         isUnlocked={isUnlocked}
       />
@@ -439,14 +436,6 @@ export function App() {
       <InstallGuideModal
         isOpen={isInstallGuideOpen}
         onClose={() => setIsInstallGuideOpen(false)}
-      />
-
-      <ReadmoImportModal
-        isOpen={isReadmoOpen}
-        onClose={() => setIsReadmoOpen(false)}
-        adminPasscode={adminPasscode}
-        isUnlocked={isUnlocked}
-        onRequestUnlock={() => setIsAdminModalOpen(true)}
       />
     </div>
   );

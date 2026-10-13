@@ -9,6 +9,4 @@ coverage/
 
 # 本機產生的敏感與暫存資料（不可進版本控制）
 data/admin.json
-data/readmoo/
-data/readmoo-upload.json
 .workbuddy/

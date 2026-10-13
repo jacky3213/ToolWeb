@@ -6,23 +6,6 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 
-// Readmoo 小說自動導入（搜尋 / 爬取 / EPUB 打包 / 上傳）
-import {
-  searchNovels,
-  getBookInfo,
-  createJob,
-  getJob,
-  listJobs,
-  publicJob,
-  resolveVolumeFile,
-  loadUploadConfig,
-  saveUploadConfig,
-  parseCurl,
-  checkRateLimit,
-  clientIp,
-  diagnoseConnectivity,
-} from "./readmo";
-
 dotenv.config();
 
 // Initialize Gemini
@@ -674,7 +657,7 @@ refreshScriptsFromGitHub().catch(console.error);
 // 優先順序：環境變數 ADMIN_PASSCODE > 本機 admin.json > 隨機一次性密碼。
 // 部署環境請用 AI Studio 的 Secrets 面板設定 ADMIN_PASSCODE（runtime 注入、不進任何 repo）。
 let adminPasscode = process.env.ADMIN_PASSCODE || "";
-let isPasscodeRequired = true; // Protect uploading by default (也保護 readmo 爬取/上傳)
+let isPasscodeRequired = true; // Protect uploading by default
 
 // 只有當「未設定環境變數」時，才從本機 admin.json 讀取
 if (!adminPasscode && fs.existsSync(ADMIN_FILE)) {
@@ -1199,150 +1182,6 @@ async function startServer() {
       console.error("Gemini Error:", error);
       res.status(500).json({ error: error.message || "連線至 Gemini 失敗" });
     }
-  });
-
-  /* ==================== Readmoo 小說自動導入 ==================== */
-
-  // 保護中介層：readmo 系列 API 會代替你去打第三方網站、也會用到你的 Readmoo 帳密，
-  // 因此一律要求管理員密碼 + 每 IP 速率限制，避免這台伺服器被人當成免費爬蟲 Proxy。
-  const READMO_RATE = {
-    search: { limit: 20, windowMs: 60_000 },   // 每分鐘 20 次搜尋
-    info: { limit: 30, windowMs: 60_000 },     // 每分鐘 30 次書籍資訊
-    import: { limit: 10, windowMs: 3_600_000 }, // 每小時 10 本
-    config: { limit: 10, windowMs: 60_000 },
-  };
-
-  function guardReadmo(kind: keyof typeof READMO_RATE) {
-    return (req: express.Request, res: express.Response, next: express.NextFunction) => {
-      // 只接受標頭傳遞密碼：避免密碼出現在 URL query（會被存取記錄、瀏覽器歷史、Referer 留存）
-      const passcode = req.headers['x-admin-passcode'];
-      if (isPasscodeRequired && passcode !== adminPasscode) {
-        return res.status(401).json({ error: "需要管理員密碼才能使用小說導入功能" });
-      }
-      const cfg = READMO_RATE[kind];
-      const r = checkRateLimit(`readmo:${kind}:${clientIp(req)}`, cfg.limit, cfg.windowMs);
-      if (!r.ok) {
-        res.setHeader('Retry-After', String(r.retryAfterSec));
-        return res.status(429).json({
-          error: `請求過於頻繁，請 ${r.retryAfterSec} 秒後再試（限制：${cfg.limit} 次 / ${Math.round(cfg.windowMs / 1000)} 秒）`,
-        });
-      }
-      next();
-    };
-  }
-
-  // API 10-1: 站內搜尋（UU看書 / 台灣小說網 / 69書吧）
-  app.get("/api/readmo/search", guardReadmo('search'), async (req, res) => {
-    try {
-      const q = String(req.query.q || '').trim();
-      if (!q) return res.json({ results: [] });
-      if (q.length > 60) return res.status(400).json({ error: "關鍵字過長" });
-      const results = await searchNovels(q);
-      res.json({ results });
-    } catch (err: any) {
-      console.error("[readmo] search error:", err);
-      res.status(500).json({ error: err.message || "搜尋失敗" });
-    }
-  });
-
-  // API 10-2: 讀取書籍資訊（字數 / 章數 / 作者）
-  app.get("/api/readmo/info", guardReadmo('info'), async (req, res) => {
-    try {
-      const url = String(req.query.url || '').trim();
-      if (!url) return res.status(400).json({ error: "缺少書籍網址" });
-      const info = await getBookInfo(url);
-      res.json({ info });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || "讀取書籍資訊失敗" });
-    }
-  });
-
-  // API 10-3: 建立導入任務（帳密僅存於記憶體，不落盤、不打 log）
-  app.post("/api/readmo/import", guardReadmo('import'), (req, res) => {
-    try {
-      const { bookUrl, email, password, title } = req.body || {};
-      if (!bookUrl) return res.status(400).json({ error: "請先選擇小說" });
-      if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(email))) {
-        return res.status(400).json({ error: "Email 格式不正確" });
-      }
-      const job = createJob({
-        bookUrl: String(bookUrl),
-        email: String(email || ''),
-        password: String(password || ''),
-        title: title ? String(title) : undefined,
-      });
-      res.json({ job: publicJob(job) });
-    } catch (err: any) {
-      console.error("[readmo] import error:", err);
-      res.status(500).json({ error: err.message || "建立任務失敗" });
-    }
-  });
-
-  // API 10-4: 任務查詢（輪詢進度）
-  app.get("/api/readmo/jobs", guardReadmo('info'), (req, res) => {
-    res.json({ jobs: listJobs() });
-  });
-
-  app.get("/api/readmo/jobs/:id", guardReadmo('info'), (req, res) => {
-    const job = getJob(req.params.id);
-    if (!job) return res.status(404).json({ error: "找不到任務" });
-    res.json({ job: publicJob(job) });
-  });
-
-  // API 10-5: 下載打包好的 EPUB（上傳端點未設定時的手動備援）
-  app.get("/api/readmo/jobs/:id/volume/:file", guardReadmo('info'), (req, res) => {
-    const full = resolveVolumeFile(req.params.id, req.params.file);
-    if (!full) return res.status(404).send("找不到該 EPUB 檔案");
-    const bookName = encodeURIComponent((getJob(req.params.id)?.title || 'novel').replace(/[^\p{L}\p{N}_-]+/gu, '_'));
-    res.setHeader('Content-Type', 'application/epub+zip');
-    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${bookName}.epub`);
-    res.sendFile(full);
-  });
-
-  // API 10-6: 上傳端點設定（由 DevTools 複製的 cURL 學習）
-  app.get("/api/readmo/config", guardReadmo('config'), (req, res) => {
-    const cfg = loadUploadConfig();
-    res.json({
-      configured: !!cfg,
-      method: cfg?.method,
-      url: cfg?.url,
-      fileField: cfg?.fileField,
-      // 錄製請求若原本帶靜態憑證，已被剝除並改用每次登入的 session
-      hasStaticAuth: !!cfg?.hasStaticAuth,
-      updatedAt: cfg?.updatedAt,
-    });
-  });
-
-  app.post("/api/readmo/config", guardReadmo('config'), (req, res) => {
-    try {
-      const { curl } = req.body || {};
-      if (!curl) return res.status(400).json({ error: "請貼上從 DevTools 複製的 cURL" });
-      if (String(curl).length > 20000) return res.status(400).json({ error: "cURL 內容過長" });
-      const cfg = parseCurl(String(curl));
-      saveUploadConfig(cfg);
-      res.json({
-        success: true,
-        url: cfg.url,
-        method: cfg.method,
-        fileField: cfg.fileField,
-        hasStaticAuth: !!cfg.hasStaticAuth,
-      });
-    } catch (err: any) {
-      res.status(400).json({ error: err.message || "cURL 解析失敗" });
-    }
-  });
-
-  // API 10-7: 連通性診斷（判斷哪些上游被擋）
-  // 不需密碼（純探測連通性、不涉敏感資料），僅做每 IP 限流，方便部署後直接用瀏覽器驗證
-  app.get("/api/readmo/diag", (req, res) => {
-    const r = checkRateLimit(`readmo:diag:${clientIp(req)}`, 10, 60_000);
-    if (!r.ok) {
-      res.setHeader('Retry-After', String(r.retryAfterSec));
-      return res.status(429).json({ error: `請求過於頻繁，請 ${r.retryAfterSec} 秒後再試` });
-    }
-    diagnoseConnectivity()
-      .then((result) => res.json({ diag: result }))
-      .catch((err) => res.status(500).json({ error: err.message || "診斷失敗" }));
   });
 
   // Vite middleware for development
