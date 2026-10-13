@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說傳書 (Novel → Readmoo)
 // @namespace    https://github.com/jacky3213
-// @version      0.1.0
+// @version      0.1.1
 // @updateURL     https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @downloadURL   https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @description  一鍵抓取整本小說 → 打包 EPUB → 自動上傳到 Readmoo (mooInk) 書櫃。全程在你的瀏覽器執行，繞過 Cloudflare / Cognito WAF 對伺服器 IP 的封鎖。
@@ -93,22 +93,54 @@
         return 'xxxx'.replace(/x/g, () => Math.floor(Math.random() * 16).toString(16)) + Date.now().toString(36);
     };
 
+    // 抓取速度預設（章節間延遲 + 隨機抖動，避免固定模式被反爬辨識）
+    const SPEED_PRESETS = {
+        slow: { delay: 2500, jitter: 1000, label: '慢（最穩）' },
+        medium: { delay: 1200, jitter: 500, label: '中' },
+        fast: { delay: 500, jitter: 300, label: '快（易被限流）' },
+    };
+
     // 同源章節頁：優先頁面原生 fetch（帶完整 cookie 與瀏覽器特徵，反 403）
-    async function fetchPage(url) {
-        const res = await fetch(url, { credentials: 'include' });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const buf = await res.arrayBuffer();
-        const ct = (res.headers.get('content-type') || '').toLowerCase();
-        let text;
-        try {
-            text = new TextDecoder('utf-8', { fatal: false }).decode(buf);
-            if (ct.includes('gbk') || ct.includes('gb2312') || /[\ufffd]{3,}/.test(text)) {
-                text = new TextDecoder('gbk', { fatal: false }).decode(buf);
+    // 遇到 429 時指數退避重試（30s/60s/120s/240s），避免被封鎖後整本失敗
+    async function fetchPage(url, onLog) {
+        const MAX_RETRY = 3;
+        let lastErr;
+        for (let attempt = 0; attempt <= MAX_RETRY; attempt++) {
+            let res;
+            try {
+                res = await fetch(url, { credentials: 'include' });
+            } catch (e) {
+                lastErr = e;
+                if (attempt === MAX_RETRY) break;
+                await sleep(2000 * (attempt + 1));
+                continue;
             }
-        } catch (e) {
-            text = new TextDecoder('utf-8').decode(buf);
+            if (res.status === 429) {
+                const wait = 30000 * Math.pow(2, attempt); // 30s / 60s / 120s / 240s
+                if (onLog) onLog('⚠ HTTP 429 被限流，等待 ' + Math.round(wait / 1000) + ' 秒後重試…');
+                await sleep(wait);
+                continue;
+            }
+            if (!res.ok) {
+                lastErr = new Error('HTTP ' + res.status);
+                if (attempt === MAX_RETRY) break;
+                await sleep(2000 * (attempt + 1));
+                continue;
+            }
+            const buf = await res.arrayBuffer();
+            const ct = (res.headers.get('content-type') || '').toLowerCase();
+            let text;
+            try {
+                text = new TextDecoder('utf-8', { fatal: false }).decode(buf);
+                if (ct.includes('gbk') || ct.includes('gb2312') || /[\ufffd]{3,}/.test(text)) {
+                    text = new TextDecoder('gbk', { fatal: false }).decode(buf);
+                }
+            } catch (e) {
+                text = new TextDecoder('utf-8').decode(buf);
+            }
+            return { text, url: res.url };
         }
-        return { text, url: res.url };
+        throw lastErr || new Error('HTTP 429 重試仍失敗，可能被暫時封鎖，請稍後再試');
     }
 
     // 跨域（Cognito / api.readmoo.com / S3）用 GM_xmlhttpRequest
@@ -369,15 +401,16 @@
         return (cands.find(a => /下一[章頁页节]/.test(txt(a))) || cands.find(a => /^下[章页頁]$/.test(txt(a))) || cands.find(a => /^next(\s*(chapter|page|→|»))?$/i.test(txt(a))))?.getAttribute('href') || null;
     }
 
-    async function crawlAll(firstChapterUrl, onProgress, onLog) {
+    async function crawlAll(firstChapterUrl, speed, onProgress, onLog) {
         const chapters = [];
         const visited = new Set();
         let url = firstChapterUrl;
         const max = 5000, maxChars = 12000000; let totalChars = 0;
+        const sp = SPEED_PRESETS[speed] || SPEED_PRESETS.slow;
         while (url && chapters.length < max) {
             if (visited.has(url)) break;
             visited.add(url);
-            const { text, url: realUrl } = await fetchPage(url);
+            const { text, url: realUrl } = await fetchPage(url, onLog);
             const doc = new DOMParser().parseFromString(text, 'text/html');
             let title = '';
             for (const sel of SITE.titleSelector.split(',')) {
@@ -400,7 +433,7 @@
             if (!next) break;
             url = norm(next, realUrl);
             if (!sameBook(url)) { onLog('下一章指向其他書/站，停止'); break; }
-            await sleep(600); // 節流
+            await sleep(sp.delay + Math.random() * sp.jitter); // 節流 + 隨機抖動
         }
         return chapters;
     }
@@ -428,6 +461,14 @@
           <input id="nr-email" type="email" placeholder="Readmoo 帳號（Email）" autocomplete="username">
           <input id="nr-pass" type="password" placeholder="Readmoo 密碼" autocomplete="current-password">
           <label style="font-size:11px;color:#94a3b8;display:flex;gap:6px;align-items:center"><input id="nr-remember" type="checkbox" style="width:auto"> 記住帳號（密碼不儲存）</label>
+          <label style="font-size:11px;color:#94a3b8;display:flex;gap:6px;align-items:center;margin:4px 0">
+            <span>抓取速度</span>
+            <select id="nr-speed" style="flex:1;background:#151b2b;border:1px solid rgba(255,255,255,.14);border-radius:8px;padding:6px 8px;color:#fff;font-size:12px">
+              <option value="slow">慢（最穩，約 2.5~3.5 秒/章）</option>
+              <option value="medium">中（約 1.2~1.7 秒/章）</option>
+              <option value="fast">快（約 0.5~0.8 秒/章，易被限流）</option>
+            </select>
+          </label>
           <div style="margin-top:8px;display:flex;gap:8px">
             <button id="nr-start">開始抓取並上傳</button>
             <button id="nr-close" style="background:#334155;color:#e2e8f0">關閉</button>
@@ -442,19 +483,22 @@
         host.querySelector('#nr-close').onclick = () => box.classList.remove('open');
         host.querySelector('#nr-email').value = GM_getValue('nr_email', '');
         host.querySelector('#nr-remember').checked = !!GM_getValue('nr_email', '');
+        host.querySelector('#nr-speed').value = GM_getValue('nr_speed', 'slow');
         host.querySelector('#nr-start').onclick = () => {
             const email = host.querySelector('#nr-email').value.trim();
             const pass = host.querySelector('#nr-pass').value;
             const remember = host.querySelector('#nr-remember').checked;
+            const speed = host.querySelector('#nr-speed').value;
             if (remember && email) GM_setValue('nr_email', email); else GM_setValue('nr_email', '');
+            GM_setValue('nr_speed', speed);
             if (!email || !pass) { alert('請輸入 Readmoo 帳號密碼'); return; }
-            onStart(email, pass, host);
+            onStart(email, pass, speed, host);
         };
         return host;
     }
 
     /* ============================ 主流程 ============================ */
-    injectUi(async (email, password, host) => {
+    injectUi(async (email, password, speed, host) => {
         const logEl = host.querySelector('#nr-log');
         const fillEl = host.querySelector('#nr-fill');
         const startBtn = host.querySelector('#nr-start');
@@ -481,7 +525,7 @@
             // 2) 爬整本
             log('開始爬取章節…');
             setPct(5);
-            const chapters = await crawlAll(chapterUrls[0], (n, t) => { setPct(5 + Math.min(50, n / 20)); if (n % 20 === 0) log('已抓 ' + n + ' 章（最新：' + t + '）'); }, log);
+            const chapters = await crawlAll(chapterUrls[0], speed, (n, t) => { setPct(5 + Math.min(50, n / 20)); if (n % 20 === 0) log('已抓 ' + n + ' 章（最新：' + t + '）'); }, log);
             log('✓ 完成爬取，共 ' + chapters.length + ' 章');
             if (!chapters.length) throw new Error('沒抓到任何章節');
 
