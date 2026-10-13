@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說傳書 (Novel → Readmoo)
 // @namespace    https://github.com/jacky3213
-// @version      0.1.9
+// @version      0.1.10
 // @updateURL     https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @downloadURL   https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @description  一鍵抓取整本小說 → 打包 EPUB → 自動上傳到 Readmoo (mooInk) 書櫃。全程在你的瀏覽器執行，繞過 Cloudflare / Cognito WAF 對伺服器 IP 的封鎖。
@@ -14,7 +14,7 @@
 // @grant        GM_setValue
 // @connect      *
 // @require      https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js
-// @require      https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js
+// @require      https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js
 // @run-at       document-end
 // @noframes
 // ==/UserScript==
@@ -368,19 +368,21 @@
     }
     const EPUB_CSS = 'body{line-height:1.75;margin:1em 0.8em}h2.chapter-title{font-size:1.1em;text-align:center;margin:0 0 1.2em}p{text-indent:2em;margin:0 0 0.6em;text-align:justify}';
 
-    async function buildEpub(title, author, chapters, volumeLabel) {
-        const zip = new JSZip();
+    function buildEpub(title, author, chapters, volumeLabel) {
         const bookTitle = volumeLabel ? title + ' ' + volumeLabel : title;
         const uid = _uuid();
-        zip.file('mimetype', 'application/epub+zip', { compression: 'STORE' });
-        zip.file('META-INF/container.xml', '<?xml version="1.0" encoding="UTF-8"?>\n<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>');
-        zip.file('OEBPS/styles.css', EPUB_CSS);
+        const u8 = (s) => fflate.strToU8(s);
+        const files = {};
+        // mimetype 必須 STORE（不壓縮）且為 zip 第一筆
+        files['mimetype'] = [u8('application/epub+zip'), { level: 0 }];
+        files['META-INF/container.xml'] = u8('<?xml version="1.0" encoding="UTF-8"?>\n<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>');
+        files['OEBPS/styles.css'] = u8(EPUB_CSS);
 
         const manifest = [], spine = [], navPoints = [], navItems = [];
         chapters.forEach((ch, i) => {
             const id = 'item' + (i + 1);
             const file = 'chap_' + String(i + 1).padStart(5, '0') + '.xhtml';
-            zip.file('OEBPS/' + file, chapterXhtml(ch.title, ch.text));
+            files['OEBPS/' + file] = u8(chapterXhtml(ch.title, ch.text));
             manifest.push('<item id="' + id + '" href="' + file + '" media-type="application/xhtml+xml"/>');
             spine.push('<itemref idref="' + id + '"/>');
             const t = xmlEscape(ch.title.slice(0, 80));
@@ -391,12 +393,12 @@
         manifest.push('<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>');
         manifest.push('<item id="css" href="styles.css" media-type="text/css"/>');
 
-        zip.file('OEBPS/content.opf', '<?xml version="1.0" encoding="UTF-8"?>\n<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">\n<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="pub-id">urn:uuid:' + uid + '</dc:identifier><dc:title>' + xmlEscape(bookTitle) + '</dc:title><dc:creator>' + xmlEscape(author || '未知作者') + '</dc:creator><dc:language>zh-TW</dc:language></metadata>\n<manifest>' + manifest.join('') + '</manifest>\n<spine toc="ncx">' + spine.join('') + '</spine>\n</package>');
-        zip.file('OEBPS/toc.ncx', '<?xml version="1.0" encoding="UTF-8"?>\n<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="urn:uuid:' + uid + '"/></head><docTitle><text>' + xmlEscape(bookTitle) + '</text></docTitle><navMap>\n' + navPoints.join('\n') + '\n</navMap></ncx>');
-        zip.file('OEBPS/nav.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><meta charset="UTF-8" /><title>目錄</title></head><body><nav epub:type="toc" id="toc"><h1>目錄</h1><ol>' + navItems.join('') + '</ol></nav></body></html>');
+        files['OEBPS/content.opf'] = u8('<?xml version="1.0" encoding="UTF-8"?>\n<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">\n<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="pub-id">urn:uuid:' + uid + '</dc:identifier><dc:title>' + xmlEscape(bookTitle) + '</dc:title><dc:creator>' + xmlEscape(author || '未知作者') + '</dc:creator><dc:language>zh-TW</dc:language></metadata>\n<manifest>' + manifest.join('') + '</manifest>\n<spine toc="ncx">' + spine.join('') + '</spine>\n</package>');
+        files['OEBPS/toc.ncx'] = u8('<?xml version="1.0" encoding="UTF-8"?>\n<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="urn:uuid:' + uid + '"/></head><docTitle><text>' + xmlEscape(bookTitle) + '</text></docTitle><navMap>\n' + navPoints.join('\n') + '\n</navMap></ncx>');
+        files['OEBPS/nav.xhtml'] = u8('<?xml version="1.0" encoding="UTF-8"?>\n<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><meta charset="UTF-8" /><title>目錄</title></head><body><nav epub:type="toc" id="toc"><h1>目錄</h1><ol>' + navItems.join('') + '</ol></nav></body></html>');
 
-        // 同步 generate 直接產出 Uint8Array，避免 generateAsync 的非同步調度在 Tampermonkey 沙盒卡住；level 3 平衡速度與大小
-        return zip.generate({ type: 'uint8array', compression: 'DEFLATE', compressionOptions: { level: 3 }, mimeType: 'application/epub+zip' });
+        // fflate 同步打包（無非同步調度問題），level 3 平衡速度與大小
+        return fflate.zipSync(files, { level: 3 });
     }
 
     /* ============================ 爬整本 ============================ */
