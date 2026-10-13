@@ -429,7 +429,7 @@ export function App() {
           });
         }}
         isProtectionEnabled={isProtectionEnabled}
-        onVerifySuccess={() => setIsUnlocked(true)}
+        onVerifySuccess={(passcode) => { setAdminPasscode(passcode); setIsUnlocked(true); }}
         isUnlocked={isUnlocked}
       />
 

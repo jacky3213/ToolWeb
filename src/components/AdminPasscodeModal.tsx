@@ -7,7 +7,7 @@ interface AdminPasscodeModalProps {
   adminPasscode: string;
   onSavePasscode: (newCode: string, isRequired: boolean) => void;
   isProtectionEnabled: boolean;
-  onVerifySuccess: () => void;
+  onVerifySuccess: (passcode: string) => void;
   isUnlocked: boolean;
 }
 
@@ -25,18 +25,39 @@ export const AdminPasscodeModal: React.FC<AdminPasscodeModalProps> = ({
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [verifying, setVerifying] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleVerify = (e: React.FormEvent) => {
+  // 交由後端 /api/admin/verify 驗證：前端「不」持有真實密碼，也不做本地比對
+  const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (inputCode === adminPasscode || !isProtectionEnabled) {
-      onVerifySuccess();
-      setSuccessMsg('✅ 身分驗證成功！您現在已取得管理員解鎖權限。');
-      setErrorMsg('');
-      setTimeout(() => setSuccessMsg(''), 3000);
-    } else {
-      setErrorMsg('❌ 密碼不正確！請確認您的管理員密碼');
+    if (!isProtectionEnabled) {
+      onVerifySuccess(inputCode);
+      return;
+    }
+    setVerifying(true);
+    setErrorMsg('');
+    try {
+      const res = await fetch('/api/admin/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passcode: inputCode }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        onVerifySuccess(inputCode);
+        setSuccessMsg('✅ 身分驗證成功！您現在已取得管理員解鎖權限。');
+        setErrorMsg('');
+        setInputCode('');
+        setTimeout(() => setSuccessMsg(''), 3000);
+      } else {
+        setErrorMsg('❌ ' + (data.error || '密碼不正確！請確認您的管理員密碼'));
+      }
+    } catch (err) {
+      setErrorMsg('❌ 連線失敗，請稍後再試');
+    } finally {
+      setVerifying(false);
     }
   };
 
@@ -119,10 +140,11 @@ export const AdminPasscodeModal: React.FC<AdminPasscodeModalProps> = ({
 
             <button
               type="submit"
-              className="w-full py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-mono text-xs font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-2"
+              disabled={verifying}
+              className="w-full py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-mono text-xs font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-2 disabled:opacity-60"
             >
               <Key className="h-4 w-4" />
-              <span>驗證並解鎖管理權限</span>
+              <span>{verifying ? '驗證中…' : '驗證並解鎖管理權限'}</span>
             </button>
           </form>
         ) : (
