@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說傳書 (Novel → Readmoo)
 // @namespace    https://github.com/jacky3213
-// @version      0.1.8
+// @version      0.1.9
 // @updateURL     https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @downloadURL   https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @description  一鍵抓取整本小說 → 打包 EPUB → 自動上傳到 Readmoo (mooInk) 書櫃。全程在你的瀏覽器執行，繞過 Cloudflare / Cognito WAF 對伺服器 IP 的封鎖。
@@ -395,8 +395,8 @@
         zip.file('OEBPS/toc.ncx', '<?xml version="1.0" encoding="UTF-8"?>\n<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="urn:uuid:' + uid + '"/></head><docTitle><text>' + xmlEscape(bookTitle) + '</text></docTitle><navMap>\n' + navPoints.join('\n') + '\n</navMap></ncx>');
         zip.file('OEBPS/nav.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><meta charset="UTF-8" /><title>目錄</title></head><body><nav epub:type="toc" id="toc"><h1>目錄</h1><ol>' + navItems.join('') + '</ol></nav></body></html>');
 
-        const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', mimeType: 'application/epub+zip' });
-        return new Uint8Array(await blob.arrayBuffer());
+        // 同步 generate 直接產出 Uint8Array，避免 generateAsync 的非同步調度在 Tampermonkey 沙盒卡住；level 3 平衡速度與大小
+        return zip.generate({ type: 'uint8array', compression: 'DEFLATE', compressionOptions: { level: 3 }, mimeType: 'application/epub+zip' });
     }
 
     /* ============================ 爬整本 ============================ */
@@ -438,6 +438,8 @@
             const label = '第' + (vIdx + 1) + '卷';
             const t0 = Date.now();
             log('── 打包 ' + label + '（' + volumeChapters.length + ' 章）…');
+            const maxCh = volumeChapters.reduce((m, c) => Math.max(m, c.text.length), 0);
+            log('  總字數 ' + volumeChars + '，最大單章 ' + maxCh + ' 字');
             setPct(Math.min(90, 60 + Math.round(vIdx / estVolumes * 30)));
             const bytes = await buildEpub(bookTitle, '', volumeChapters, label);
             log('✓ ' + label + ' 打包完成（' + (bytes.length / 1024).toFixed(0) + ' KB，耗時 ' + ((Date.now() - t0) / 1000).toFixed(1) + ' 秒）');
