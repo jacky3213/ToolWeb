@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說傳書 (Novel → Readmoo)
 // @namespace    https://github.com/jacky3213
-// @version      0.1.4
+// @version      0.1.5
 // @updateURL     https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @downloadURL   https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @description  一鍵抓取整本小說 → 打包 EPUB → 自動上傳到 Readmoo (mooInk) 書櫃。全程在你的瀏覽器執行，繞過 Cloudflare / Cognito WAF 對伺服器 IP 的封鎖。
@@ -273,6 +273,7 @@
                 ClientId: CLIENT_ID,
                 ChallengeResponses: {
                     USERNAME: username,
+                    PASSWORD_CLAIM_SECRET_BLOCK: secretBlock,
                     PASSWORD_CLAIM_SIGNATURE: claim,
                     TIMESTAMP: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
                 },
