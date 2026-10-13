@@ -115,5 +115,32 @@
     "isFeatured": false,
     "baseDownloadCount": 0,
     "downloadCount": 17
+  },
+  {
+    "id": "readmo-novel",
+    "name": "小說傳書 (Novel → Readmoo)",
+    "packageName": "https://github.com/jacky3213",
+    "version": "v0.1.0",
+    "versionCode": 1,
+    "minSdk": "Tampermonkey (Chrome/Firefox/Edge)",
+    "architecture": "universal",
+    "fileSize": "28.9 KB",
+    "icon": "Terminal",
+    "category": "Tampermonkey",
+    "summary": "一鍵抓取整本小說 → 打包 EPUB → 自動上傳 Readmoo (mooInk) 書櫃，全程瀏覽器執行",
+    "description": "在小說章節頁一鍵抓取整本、打包 EPUB 分卷、自動上傳到 Readmoo 書櫃（供 mooInk 同步閱讀）。全程在你的瀏覽器執行，繞過 Cloudflare 與 Cognito WAF 對伺服器 IP 的封鎖。支援 uukanshu.cc、twkan.com 與 69shu 家族鏡像站。帳密只在本地使用，不上傳到任何伺服器。",
+    "changelog": [
+      "v0.1.0: 首次發布——爬整本、EPUB 分卷打包、Cognito SRP 登入、兩段式上傳（建立 document → S3 presigned PUT）"
+    ],
+    "downloadUrl": "/api/download/readmo-novel.user.js",
+    "scriptFileName": "readmo-novel.user.js",
+    "rating": 5,
+    "releaseDate": "2026-10-14",
+    "checksumSha256": "08a50d105867dbf7f1c83cd3bb589574f5fdfdb583af9b5bb0f03662a196e8cd",
+    "screenshots": [],
+    "isOfficial": true,
+    "isFeatured": false,
+    "baseDownloadCount": 0,
+    "downloadCount": 0
   }
 ]
