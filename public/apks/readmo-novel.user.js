@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說傳書 (Novel → Readmoo)
 // @namespace    https://github.com/jacky3213
-// @version      0.1.6
+// @version      0.1.7
 // @updateURL     https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @downloadURL   https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @description  一鍵抓取整本小說 → 打包 EPUB → 自動上傳到 Readmoo (mooInk) 書櫃。全程在你的瀏覽器執行，繞過 Cloudflare / Cognito WAF 對伺服器 IP 的封鎖。
@@ -183,9 +183,16 @@
         'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8',
     };
 
-    const sha256Hex = (s) => CryptoJS.SHA256(s).toString(CryptoJS.enc.Hex);
+    const sha256Hex = (s) => CryptoJS.SHA256(s).toString(CryptoJS.enc.Hex); // 對字串做 UTF-8 的 SHA256
+    const hexHash = (hexStr) => CryptoJS.SHA256(CryptoJS.enc.Hex.parse(hexStr)).toString(CryptoJS.enc.Hex); // 先 hex 解碼再 SHA256
     const hexBigInt = (h) => BigInt('0x' + h);
-    const padHex = (h) => h.padStart(768, '0');
+    // Java BigInteger.toByteArray() 相容的 two's-complement 編碼：偶數長度 + MSB 置位時加 "00" 前綴
+    const padHex = (v) => {
+        let hex = v.toString(16);
+        if (hex.length % 2 !== 0) hex = '0' + hex;
+        if (/^[89a-f]/i.test(hex)) hex = '00' + hex;
+        return hex;
+    };
 
     function modPow(base, exp, mod) {
         let r = 1n, b = ((base % mod) + mod) % mod, e = exp;
@@ -200,21 +207,14 @@
         return BigInt('0x' + h);
     }
 
-    function computeHkdf(Ahex, Shex) {
-        const keyWA = CryptoJS.enc.Hex.parse(padHex(Ahex));
-        const ikmWA = CryptoJS.enc.Hex.parse(padHex(Shex));
-        const prk = CryptoJS.HmacSHA256(ikmWA, keyWA);
+    // Cognito 的 HKDF：PRK = HMAC-SHA256(key=salt=u, msg=ikm=S)；輸出 = HMAC-SHA256(key=PRK, msg="Caldera Derived Key"+0x01) 取前 16 bytes
+    function computeHkdf(S, u) {
+        const ikmWA = CryptoJS.enc.Hex.parse(padHex(S));      // ikm = S
+        const saltWA = CryptoJS.enc.Hex.parse(padHex(u));     // salt = u
+        const prk = CryptoJS.HmacSHA256(ikmWA, saltWA);       // HMAC(key=salt, message=ikm)
         const infoWA = CryptoJS.enc.Utf8.parse('Caldera Derived Key').concat(CryptoJS.enc.Hex.parse('01'));
-        let prev = CryptoJS.lib.WordArray.create();
-        const words = [];
-        for (let i = 0; i < 16; i++) {
-            const data = prev.clone()
-                .concat(infoWA)
-                .concat(CryptoJS.enc.Hex.parse((i + 1).toString(16).padStart(2, '0')));
-            prev = CryptoJS.HmacSHA256(data, prk);
-            words.push(prev.words[0]);
-        }
-        return CryptoJS.lib.WordArray.create(words); // 64 bytes
+        const full = CryptoJS.HmacSHA256(infoWA, prk);        // HMAC(key=prk, message=info)
+        return CryptoJS.lib.WordArray.create(full.words.slice(0, 4), 16); // 前 16 bytes
     }
 
     // Cognito 的 TIMESTAMP 需 Java Date.toString() 格式（EEE MMM d HH:mm:ss UTC yyyy，英文）
@@ -231,7 +231,7 @@
         const a = randomBigInt(128);
         const A = modPow(SRP_g, a, SRP_N);
 
-        // InitiateAuth USER_SRP_AUTH
+        // 1) InitiateAuth USER_SRP_AUTH
         const init = await gmRequest({
             method: 'POST',
             url: COGNITO_URL,
@@ -243,7 +243,7 @@
             data: JSON.stringify({
                 AuthFlow: 'USER_SRP_AUTH',
                 ClientId: CLIENT_ID,
-                AuthParameters: { USERNAME: username, SRP_A: padHex(A.toString(16)) },
+                AuthParameters: { USERNAME: username, SRP_A: A.toString(16) },
             }),
         });
         let j = JSON.parse(init.text || '{}');
@@ -251,25 +251,32 @@
         if (j.ChallengeName !== 'PASSWORD_VERIFIER') throw new Error('挑戰類型異常：' + (j.ChallengeName || '(無)'));
 
         const p = j.ChallengeParameters || {};
-        const salt = p.SALT || '';
-        const B = p.SRP_B || '';
+        const salt = hexBigInt(p.SALT || '0');            // SALT 為 hex，轉 BigInt
+        const B = hexBigInt(p.SRP_B || '0');
         const secretBlock = p.SECRET_BLOCK || '';
-        const userIdForSrp = p.USER_ID_FOR_SRP || '';
+        const userIdForSrp = p.USER_ID_FOR_SRP || username;
+        const session = j.Session || '';
         const poolName = POOL_ID.split('_')[1];
 
-        const x = hexBigInt(sha256Hex(salt + sha256Hex(poolName + username + ':' + password)));
-        const k = hexBigInt(sha256Hex(padHex(SRP_N.toString(16)) + padHex(SRP_g.toString(16))));
-        const u = hexBigInt(sha256Hex(padHex(A.toString(16)) + padHex(B)));
+        // 2) SRP-6a 計算（完全對照 amazon-cognito-identity-js）
+        const usernamePasswordHash = sha256Hex(poolName + userIdForSrp + ':' + password);
+        const x = hexBigInt(hexHash(padHex(salt) + usernamePasswordHash));
+        const k = hexBigInt(hexHash(padHex(SRP_N) + padHex(SRP_g)));
+        const u = hexBigInt(hexHash(padHex(A) + padHex(B)));
         const gPowX = modPow(SRP_g, x, SRP_N);
-        const base = ((hexBigInt(B) - k * gPowX) % SRP_N + SRP_N) % SRP_N;
+        const base = ((B - k * gPowX) % SRP_N + SRP_N) % SRP_N;
         const S = modPow(base, a + u * x, SRP_N);
 
-        const hkdfKey = computeHkdf(A.toString(16), S.toString(16));
+        // 3) HKDF(S, u) → 16 bytes key；claim = HMAC-SHA256(key, poolName+userIdForSrp+secretBlock+timestamp)
+        const hkdfKey = computeHkdf(S, u);
+        const dateNow = srpTimestamp();
         const claimData = CryptoJS.enc.Utf8.parse(poolName)
             .concat(CryptoJS.enc.Utf8.parse(userIdForSrp))
-            .concat(CryptoJS.enc.Base64.parse(secretBlock));
+            .concat(CryptoJS.enc.Base64.parse(secretBlock))
+            .concat(CryptoJS.enc.Utf8.parse(dateNow));
         const claim = CryptoJS.HmacSHA256(claimData, hkdfKey).toString(CryptoJS.enc.Base64);
 
+        // 4) RespondToAuthChallenge
         const resp = await gmRequest({
             method: 'POST',
             url: COGNITO_URL,
@@ -282,11 +289,12 @@
                 ChallengeName: 'PASSWORD_VERIFIER',
                 ClientId: CLIENT_ID,
                 ChallengeResponses: {
-                    USERNAME: username,
+                    USERNAME: userIdForSrp,
                     PASSWORD_CLAIM_SECRET_BLOCK: secretBlock,
                     PASSWORD_CLAIM_SIGNATURE: claim,
-                    TIMESTAMP: srpTimestamp(),
+                    TIMESTAMP: dateNow,
                 },
+                Session: session,
             }),
         });
         j = JSON.parse(resp.text || '{}');
