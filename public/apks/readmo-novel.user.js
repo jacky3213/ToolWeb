@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說傳書 (Novel → Readmoo)
 // @namespace    https://github.com/jacky3213
-// @version      0.1.3
+// @version      0.1.4
 // @updateURL     https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @downloadURL   https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @description  一鍵抓取整本小說 → 打包 EPUB → 自動上傳到 Readmoo (mooInk) 書櫃。全程在你的瀏覽器執行，繞過 Cloudflare / Cognito WAF 對伺服器 IP 的封鎖。
@@ -175,6 +175,13 @@
     const POOL_ID = 'ap-northeast-1_EH9vxBYqK';
     const CLIENT_ID = '1vo6drk6c6ma7htam496pnrkdr';
     const COGNITO_URL = 'https://cognito-idp.ap-northeast-1.amazonaws.com/';
+    // Cognito 前有 AWS WAF，缺 Origin/Referer 會被判定為 bot 而回 ForbiddenException（WAF block）
+    const COGNITO_HEADERS = {
+        'Origin': 'https://next.readmoo.com',
+        'Referer': 'https://next.readmoo.com/',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8',
+    };
 
     const sha256Hex = (s) => CryptoJS.SHA256(s).toString(CryptoJS.enc.Hex);
     const hexBigInt = (h) => BigInt('0x' + h);
@@ -221,6 +228,7 @@
             headers: {
                 'Content-Type': 'application/x-amz-json-1.1',
                 'X-Amz-Target': 'AWSCognitoIdentityProviderService.InitiateAuth',
+                ...COGNITO_HEADERS,
             },
             data: JSON.stringify({
                 AuthFlow: 'USER_SRP_AUTH',
@@ -258,6 +266,7 @@
             headers: {
                 'Content-Type': 'application/x-amz-json-1.1',
                 'X-Amz-Target': 'AWSCognitoIdentityProviderService.RespondToAuthChallenge',
+                ...COGNITO_HEADERS,
             },
             data: JSON.stringify({
                 ChallengeName: 'PASSWORD_VERIFIER',
