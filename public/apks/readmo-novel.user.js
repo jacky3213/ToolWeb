@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說傳書 (Novel → Readmoo)
 // @namespace    https://github.com/jacky3213
-// @version      0.1.1
+// @version      0.1.2
 // @updateURL     https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @downloadURL   https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @description  一鍵抓取整本小說 → 打包 EPUB → 自動上傳到 Readmoo (mooInk) 書櫃。全程在你的瀏覽器執行，繞過 Cloudflare / Cognito WAF 對伺服器 IP 的封鎖。
@@ -99,6 +99,13 @@
         medium: { delay: 1200, jitter: 500, label: '中' },
         fast: { delay: 500, jitter: 300, label: '快（易被限流）' },
     };
+    // 全域可變速度：抓取過程中使用者改 select 即時生效
+    let currentSpeed = 'slow';
+    // 每卷章數／字數閾值（邊抓邊上傳，控制記憶體與斷點損失）
+    const VOLUME_CHAPTERS = 200;
+    const VOLUME_CHARS = 900000;
+    // 斷點續傳：依「站點:書id」命名空間
+    const resumeKey = () => 'nr_resume_' + hostname + ':' + bookId;
 
     // 同源章節頁：優先頁面原生 fetch（帶完整 cookie 與瀏覽器特徵，反 403）
     // 遇到 429 時指數退避重試（30s/60s/120s/240s），避免被封鎖後整本失敗
@@ -361,29 +368,6 @@
         return new Uint8Array(await blob.arrayBuffer());
     }
 
-    function splitVolumes(chapters) {
-        const MAX_CHAPTERS = 900, MAX_CHARS = 900000, SAFE = 12000;
-        const volumes = []; let cur = [], curChars = 0;
-        const flush = () => { if (cur.length) { volumes.push(cur); cur = []; curChars = 0; } };
-        const push = (c) => { if (cur.length >= MAX_CHAPTERS || curChars + c.text.length > MAX_CHARS) flush(); cur.push(c); curChars += c.text.length; };
-        for (const ch of chapters) {
-            if (ch.text.length > 15000) {
-                const parts = []; let buf = '';
-                for (const line of ch.text.split('\n')) {
-                    if (line.length > SAFE) { if (buf) { parts.push(buf); buf = ''; } for (let i = 0; i < line.length; i += SAFE) parts.push(line.slice(i, i + SAFE)); continue; }
-                    if (buf.length + line.length > SAFE) { parts.push(buf); buf = ''; }
-                    buf += line + '\n';
-                }
-                if (buf.trim()) parts.push(buf);
-                parts.forEach((p, i) => push({ title: ch.title + '（' + (i + 1) + '/' + parts.length + '）', text: p }));
-                continue;
-            }
-            push(ch);
-        }
-        flush();
-        return volumes;
-    }
-
     /* ============================ 爬整本 ============================ */
     function findNextLink(rootDoc, pageUrl) {
         const doc = rootDoc;
@@ -401,17 +385,58 @@
         return (cands.find(a => /下一[章頁页节]/.test(txt(a))) || cands.find(a => /^下[章页頁]$/.test(txt(a))) || cands.find(a => /^next(\s*(chapter|page|→|»))?$/i.test(txt(a))))?.getAttribute('href') || null;
     }
 
-    async function crawlAll(firstChapterUrl, speed, onProgress, onLog) {
-        const chapters = [];
+    // 邊抓邊打包邊上傳的流水線：每湊滿一卷立即打包上傳並釋放記憶體，
+    // 期間每章保存斷點，遇到 429 退避耗盡時可從斷點接續
+    async function runPipeline(opts) {
+        const { token, bookTitle, chapterUrls, startUrl, doneChapters, volumeIdx, log, setPct } = opts;
+        const safeTitle = bookTitle.replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40);
+        const totalEstimate = chapterUrls.length || 0;
+        const rk = resumeKey();
+        let volumeChapters = [];
+        let volumeChars = 0;
+        let done = doneChapters;
+        let vIdx = volumeIdx;
+        let url = startUrl;
+        let lastTitle = '';
         const visited = new Set();
-        let url = firstChapterUrl;
-        const max = 5000, maxChars = 12000000; let totalChars = 0;
-        const sp = SPEED_PRESETS[speed] || SPEED_PRESETS.slow;
-        while (url && chapters.length < max) {
+
+        const flushVolume = async () => {
+            if (!volumeChapters.length) return;
+            vIdx++;
+            const label = '第' + vIdx + '卷';
+            const t0 = Date.now();
+            log('── 打包 ' + label + '（' + volumeChapters.length + ' 章）…');
+            const bytes = await buildEpub(bookTitle, '', volumeChapters, label);
+            log('✓ ' + label + ' 打包完成（' + (bytes.length / 1024).toFixed(0) + ' KB，耗時 ' + ((Date.now() - t0) / 1000).toFixed(1) + ' 秒）');
+            log('  上傳 ' + label + ' …');
+            const fileName = safeTitle + '_' + label + '.epub';
+            const docId = await uploadDocument(token, bytes, fileName, log);
+            log('✓ ' + label + ' 上傳完成（document ' + docId + '）');
+            volumeChapters = [];
+            volumeChars = 0;
+        };
+
+        // 加入一個章節片段（超長章會切分；Readmoo 單章上限 1.5 萬字）
+        const pushSeg = (t, txt) => {
+            volumeChapters.push({ title: t, text: txt });
+            volumeChars += txt.length;
+            done++;
+            lastTitle = t;
+        };
+
+        while (url && done < 5000) {
             if (visited.has(url)) break;
             visited.add(url);
-            const { text, url: realUrl } = await fetchPage(url, onLog);
-            const doc = new DOMParser().parseFromString(text, 'text/html');
+            let parsed;
+            try {
+                parsed = await fetchPage(url, log);
+            } catch (e) {
+                log('✗ 抓取中斷：' + (e && e.message ? e.message : e));
+                GM_setValue(rk, { bookKey: hostname + ':' + bookId, nextUrl: url, doneChapters: done, volumeIdx: vIdx });
+                log('已抓 ' + done + ' 章、已上傳 ' + vIdx + ' 卷。斷點已保存，可再次點「開始」接續。');
+                return { interrupted: true, done, volumeIdx: vIdx };
+            }
+            const doc = new DOMParser().parseFromString(parsed.text, 'text/html');
             let title = '';
             for (const sel of SITE.titleSelector.split(',')) {
                 const el = doc.querySelector(sel.trim());
@@ -422,20 +447,43 @@
                 const el = doc.querySelector(sel.trim());
                 if (el) { const t = el.textContent.replace(/\u00a0/g, ' ').split(/\r?\n/).map(l => l.trim()).filter(Boolean).join('\n'); if (t.length > 50) { content = t; break; } }
             }
-            if (!content) { onLog('⚠ 解析不到正文，跳過：' + url); }
-            else {
-                chapters.push({ title: title || '第 ' + (chapters.length + 1) + ' 章', text: content });
-                totalChars += content.length;
-                onProgress(chapters.length, title);
+            if (content) {
+                const baseTitle = title || '第 ' + (done + 1) + ' 章';
+                if (content.length > 15000) {
+                    const parts = [];
+                    let buf = '';
+                    for (const line of content.split('\n')) {
+                        if (line.length > 12000) { if (buf) { parts.push(buf); buf = ''; } for (let i = 0; i < line.length; i += 12000) parts.push(line.slice(i, i + 12000)); continue; }
+                        if (buf.length + line.length > 12000) { parts.push(buf); buf = ''; }
+                        buf += line + '\n';
+                    }
+                    if (buf.trim()) parts.push(buf);
+                    parts.forEach((p, i) => pushSeg(baseTitle + '（' + (i + 1) + '/' + parts.length + '）', p));
+                } else {
+                    pushSeg(baseTitle, content);
+                }
+                if (done % 5 === 0) {
+                    const pct = totalEstimate ? 5 + Math.min(60, Math.round(done / totalEstimate * 60)) : Math.min(60, 5 + Math.round(done / 100));
+                    setPct(pct);
+                    log('已抓 ' + done + (totalEstimate ? '/' + totalEstimate : '') + ' 章（最新：' + lastTitle + '）');
+                }
+            } else {
+                log('⚠ 解析不到正文，跳過：' + url);
             }
-            if (totalChars > maxChars) { onLog('已達字數上限，停止'); break; }
-            const next = findNextLink(doc, realUrl);
+            if (volumeChapters.length >= VOLUME_CHAPTERS || volumeChars >= VOLUME_CHARS) {
+                await flushVolume();
+            }
+            const next = findNextLink(doc, parsed.url);
             if (!next) break;
-            url = norm(next, realUrl);
-            if (!sameBook(url)) { onLog('下一章指向其他書/站，停止'); break; }
-            await sleep(sp.delay + Math.random() * sp.jitter); // 節流 + 隨機抖動
+            url = norm(next, parsed.url);
+            if (!sameBook(url)) { log('下一章指向其他書/站，停止'); break; }
+            GM_setValue(rk, { bookKey: hostname + ':' + bookId, nextUrl: url, doneChapters: done, volumeIdx: vIdx });
+            const sp = SPEED_PRESETS[currentSpeed] || SPEED_PRESETS.slow;
+            await sleep(sp.delay + Math.random() * sp.jitter);
         }
-        return chapters;
+        await flushVolume();
+        GM_setValue(rk, null);
+        return { interrupted: false, done, volumeIdx: vIdx };
     }
 
     /* ============================ UI 面板 ============================ */
@@ -469,6 +517,8 @@
               <option value="fast">快（約 0.5~0.8 秒/章，易被限流）</option>
             </select>
           </label>
+          <label style="font-size:11px;color:#94a3b8;display:flex;gap:6px;align-items:center"><input id="nr-fresh" type="checkbox" style="width:auto"> 重新開始（忽略上次斷點）</label>
+          <div id="nr-resume-info" style="font-size:11px;color:#fbbf24;margin:4px 0;display:none"></div>
           <div style="margin-top:8px;display:flex;gap:8px">
             <button id="nr-start">開始抓取並上傳</button>
             <button id="nr-close" style="background:#334155;color:#e2e8f0">關閉</button>
@@ -484,34 +534,53 @@
         host.querySelector('#nr-email').value = GM_getValue('nr_email', '');
         host.querySelector('#nr-remember').checked = !!GM_getValue('nr_email', '');
         host.querySelector('#nr-speed').value = GM_getValue('nr_speed', 'slow');
+        // 抓取過程中改速度即時生效
+        host.querySelector('#nr-speed').onchange = (e) => { currentSpeed = e.target.value; };
+        // 斷點提示
+        const resumeInfoEl = host.querySelector('#nr-resume-info');
+        const rk = resumeKey();
+        const resumeData = GM_getValue(rk, null);
+        if (resumeData && resumeData.doneChapters) {
+            resumeInfoEl.textContent = '⚠ 上次未完成：已抓 ' + resumeData.doneChapters + ' 章、已上傳 ' + resumeData.volumeIdx + ' 卷。可點「開始」接續。';
+            resumeInfoEl.style.display = 'block';
+        }
         host.querySelector('#nr-start').onclick = () => {
             const email = host.querySelector('#nr-email').value.trim();
             const pass = host.querySelector('#nr-pass').value;
             const remember = host.querySelector('#nr-remember').checked;
             const speed = host.querySelector('#nr-speed').value;
+            const fresh = host.querySelector('#nr-fresh').checked;
+            currentSpeed = speed;
             if (remember && email) GM_setValue('nr_email', email); else GM_setValue('nr_email', '');
             GM_setValue('nr_speed', speed);
             if (!email || !pass) { alert('請輸入 Readmoo 帳號密碼'); return; }
-            onStart(email, pass, speed, host);
+            onStart(email, pass, speed, fresh, host);
         };
         return host;
     }
 
     /* ============================ 主流程 ============================ */
-    injectUi(async (email, password, speed, host) => {
+    injectUi(async (email, password, speed, fresh, host) => {
         const logEl = host.querySelector('#nr-log');
         const fillEl = host.querySelector('#nr-fill');
         const startBtn = host.querySelector('#nr-start');
         startBtn.disabled = true;
         const log = (m) => { logEl.textContent += '[' + new Date().toLocaleTimeString('zh-TW', { hour12: false }) + '] ' + m + '\n'; logEl.scrollTop = logEl.scrollHeight; };
         const setPct = (p) => { fillEl.style.width = Math.min(100, p) + '%'; };
+        currentSpeed = speed;
 
         try {
-            // 1) 找第一章：抓書籍頁，取數值最小的章節連結
+            // 1) 登入（先登入，因為要邊抓邊打包邊上傳）
+            log('登入 Readmoo…');
+            setPct(1);
+            const token = await cognitoLogin(email, password);
+            log('✓ 登入成功');
+
+            // 2) 找第一章：抓書籍頁，取數值最小的章節連結
             log('尋找書籍目錄…');
             setPct(2);
             const bookUrl = location.origin + SITE.bookPrefix + bookId + '/';
-            const { text: bookText } = await fetchPage(bookUrl);
+            const { text: bookText } = await fetchPage(bookUrl, log);
             const bdoc = new DOMParser().parseFromString(bookText, 'text/html');
             let bookTitle = (bdoc.querySelector('h1')?.textContent || document.querySelector('h1')?.textContent || '').replace(/\s+/g, ' ').trim();
             if (!bookTitle) bookTitle = bookId;
@@ -522,47 +591,27 @@
             if (!chapterUrls.length) throw new Error('書籍頁找不到章節連結，請在「章節列表頁」開啟本腳本');
             log('書名：' + bookTitle + '，共偵測 ' + chapterUrls.length + ' 章');
 
-            // 2) 爬整本
-            log('開始爬取章節…');
-            setPct(5);
-            const chapters = await crawlAll(chapterUrls[0], speed, (n, t) => { setPct(5 + Math.min(50, n / 20)); if (n % 20 === 0) log('已抓 ' + n + ' 章（最新：' + t + '）'); }, log);
-            log('✓ 完成爬取，共 ' + chapters.length + ' 章');
-            if (!chapters.length) throw new Error('沒抓到任何章節');
-
-            // 3) 分卷打包
-            log('打包 EPUB…');
-            setPct(60);
-            const volumes = splitVolumes(chapters);
-            log('分卷：' + (volumes.length > 1 ? volumes.length + ' 卷' : '單卷'));
-            const epubFiles = [];
-            for (let i = 0; i < volumes.length; i++) {
-                const label = volumes.length > 1 ? '第' + (i + 1) + '卷' : '';
-                const bytes = await buildEpub(bookTitle, '', volumes[i], label);
-                epubFiles.push({ bytes, label, chapters: volumes[i].length });
-                log('✓ 打包完成：' + (label || '全書') + '（' + volumes[i].length + ' 章，' + (bytes.length / 1024).toFixed(0) + ' KB）');
-                setPct(60 + (i + 1) / volumes.length * 10);
+            // 3) 斷點續傳檢查
+            const rk = resumeKey();
+            const resume = GM_getValue(rk, null);
+            let startUrl = chapterUrls[0];
+            let doneChapters = 0;
+            let volumeIdx = 0;
+            if (!fresh && resume && resume.bookKey === (hostname + ':' + bookId) && resume.nextUrl) {
+                startUrl = resume.nextUrl;
+                doneChapters = resume.doneChapters;
+                volumeIdx = resume.volumeIdx;
+                log('⚠ 從上次斷點接續：第 ' + (doneChapters + 1) + ' 章起（已上傳 ' + volumeIdx + ' 卷）');
             }
 
-            // 4) 登入
-            log('登入 Readmoo…');
-            setPct(72);
-            const token = await cognitoLogin(email, password);
-            log('✓ 登入成功');
-
-            // 5) 上傳
-            let ok = 0;
-            for (let i = 0; i < epubFiles.length; i++) {
-                const f = epubFiles[i];
-                const safeTitle = bookTitle.replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40);
-                const fileName = epubFiles.length > 1 ? safeTitle + '_' + f.label + '.epub' : safeTitle + '.epub';
-                log('上傳 ' + (f.label || '全書') + '…');
-                const docId = await uploadDocument(token, f.bytes, fileName, log);
-                ok++;
-                log('✓ 上傳完成（document ' + docId + '）');
-                setPct(75 + (i + 1) / epubFiles.length * 25);
-            }
+            // 4) 邊抓邊打包邊上傳
+            log('開始抓取（每 ' + VOLUME_CHAPTERS + ' 章打包上傳一卷）…');
+            setPct(3);
+            const result = await runPipeline({ token, bookTitle, chapterUrls, startUrl, doneChapters, volumeIdx, log, setPct });
             setPct(100);
-            log('🎉 全部完成！回到 mooInk 按「同步」即可看到。');
+            if (!result.interrupted) {
+                log('🎉 全部完成！共 ' + result.done + ' 章、' + result.volumeIdx + ' 卷。回到 mooInk 按「同步」即可看到。');
+            }
         } catch (e) {
             log('✗ 失敗：' + (e && e.message ? e.message : e));
         } finally {
