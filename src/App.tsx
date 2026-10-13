@@ -8,6 +8,7 @@ import { ToolDetailModal } from './components/ToolDetailModal';
 import { AddToolModal } from './components/AddToolModal';
 import { InstallGuideModal } from './components/InstallGuideModal';
 import { AdminPasscodeModal } from './components/AdminPasscodeModal';
+import { ReadmoImportModal } from './components/ReadmoImportModal';
 import { VersionBadge } from './components/VersionBadge';
 
 export function App() {
@@ -15,7 +16,8 @@ export function App() {
   const [loading, setLoading] = useState(false);
 
   // Admin Security state
-  const [adminPasscode, setAdminPasscode] = useState('Kevin7777777');
+  // 安全性：程式碼內不得存放預設密碼，一律由使用者輸入（後端讀取 ADMIN_PASSCODE）
+  const [adminPasscode, setAdminPasscode] = useState('');
   const [isProtectionEnabled, setIsProtectionEnabled] = useState(true);
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
@@ -31,6 +33,7 @@ export function App() {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isInstallGuideOpen, setIsInstallGuideOpen] = useState(false);
   const [isSyncingDrive, setIsSyncingDrive] = useState(false);
+  const [isReadmoOpen, setIsReadmoOpen] = useState(false);
 
   // Notification Toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -227,6 +230,7 @@ export function App() {
         onOpenInstallGuide={() => setIsInstallGuideOpen(true)}
         onOpenAdminModal={() => setIsAdminModalOpen(true)}
         onSyncDrive={handleSyncDrive}
+        onOpenReadmoImport={() => setIsReadmoOpen(true)}
         isSyncingDrive={isSyncingDrive}
         isUnlocked={isUnlocked}
       />
@@ -435,6 +439,14 @@ export function App() {
       <InstallGuideModal
         isOpen={isInstallGuideOpen}
         onClose={() => setIsInstallGuideOpen(false)}
+      />
+
+      <ReadmoImportModal
+        isOpen={isReadmoOpen}
+        onClose={() => setIsReadmoOpen(false)}
+        adminPasscode={adminPasscode}
+        isUnlocked={isUnlocked}
+        onRequestUnlock={() => setIsAdminModalOpen(true)}
       />
     </div>
   );
