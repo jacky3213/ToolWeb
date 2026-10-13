@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說傳書 (Novel → Readmoo)
 // @namespace    https://github.com/jacky3213
-// @version      0.1.7
+// @version      0.1.8
 // @updateURL     https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @downloadURL   https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @description  一鍵抓取整本小說 → 打包 EPUB → 自動上傳到 Readmoo (mooInk) 書櫃。全程在你的瀏覽器執行，繞過 Cloudflare / Cognito WAF 對伺服器 IP 的封鎖。
@@ -227,7 +227,7 @@
             pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds()) + ' UTC ' + d.getUTCFullYear();
     }
 
-    async function cognitoLogin(username, password) {
+    async function cognitoLogin(username, password, log) {
         const a = randomBigInt(128);
         const A = modPow(SRP_g, a, SRP_N);
 
@@ -249,6 +249,7 @@
         let j = JSON.parse(init.text || '{}');
         if (j.__type) throw new Error(j.__type + (j.message ? '：' + j.message : ''));
         if (j.ChallengeName !== 'PASSWORD_VERIFIER') throw new Error('挑戰類型異常：' + (j.ChallengeName || '(無)'));
+        if (log) log('InitiateAuth 回應欄位：' + Object.keys(j).join(', '));
 
         const p = j.ChallengeParameters || {};
         const salt = hexBigInt(p.SALT || '0');            // SALT 為 hex，轉 BigInt
@@ -256,6 +257,7 @@
         const secretBlock = p.SECRET_BLOCK || '';
         const userIdForSrp = p.USER_ID_FOR_SRP || username;
         const session = j.Session || '';
+        if (log) log('Session 長度：' + session.length + (session ? '（' + session.slice(0, 8) + '…）' : '（空）'));
         const poolName = POOL_ID.split('_')[1];
 
         // 2) SRP-6a 計算（完全對照 amazon-cognito-identity-js）
@@ -294,7 +296,7 @@
                     PASSWORD_CLAIM_SIGNATURE: claim,
                     TIMESTAMP: dateNow,
                 },
-                Session: session,
+                Session: session || undefined,
             }),
         });
         j = JSON.parse(resp.text || '{}');
@@ -622,7 +624,7 @@
             // 1) 登入（先登入，因為要邊抓邊打包邊上傳）
             log('登入 Readmoo…');
             setPct(1);
-            const token = await cognitoLogin(email, password);
+            const token = await cognitoLogin(email, password, log);
             log('✓ 登入成功');
 
             // 2) 找第一章：抓書籍頁，取數值最小的章節連結
