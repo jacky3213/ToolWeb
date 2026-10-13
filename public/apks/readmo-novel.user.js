@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說傳書 (Novel → Readmoo)
 // @namespace    https://github.com/jacky3213
-// @version      0.1.5
+// @version      0.1.6
 // @updateURL     https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @downloadURL   https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @description  一鍵抓取整本小說 → 打包 EPUB → 自動上傳到 Readmoo (mooInk) 書櫃。全程在你的瀏覽器執行，繞過 Cloudflare / Cognito WAF 對伺服器 IP 的封鎖。
@@ -217,6 +217,16 @@
         return CryptoJS.lib.WordArray.create(words); // 64 bytes
     }
 
+    // Cognito 的 TIMESTAMP 需 Java Date.toString() 格式（EEE MMM d HH:mm:ss UTC yyyy，英文）
+    function srpTimestamp() {
+        const weekDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const d = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        return weekDays[d.getUTCDay()] + ' ' + months[d.getUTCMonth()] + ' ' + d.getUTCDate() + ' ' +
+            pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds()) + ' UTC ' + d.getUTCFullYear();
+    }
+
     async function cognitoLogin(username, password) {
         const a = randomBigInt(128);
         const A = modPow(SRP_g, a, SRP_N);
@@ -275,7 +285,7 @@
                     USERNAME: username,
                     PASSWORD_CLAIM_SECRET_BLOCK: secretBlock,
                     PASSWORD_CLAIM_SIGNATURE: claim,
-                    TIMESTAMP: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+                    TIMESTAMP: srpTimestamp(),
                 },
             }),
         });
