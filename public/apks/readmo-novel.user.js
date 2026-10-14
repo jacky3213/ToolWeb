@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說傳書 (Novel → Readmoo)
 // @namespace    https://github.com/jacky3213
-// @version      0.2.0
+// @version      0.2.1
 // @updateURL     https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @downloadURL   https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @description  一鍵抓取整本小說 → 打包 EPUB → 自動上傳到 Readmoo (mooInk) 書櫃。全程在你的瀏覽器執行，繞過 Cloudflare / Cognito WAF 對伺服器 IP 的封鎖。
@@ -164,7 +164,7 @@
                 data: opt.data,
                 binary: !!opt.binary,
                 timeout: opt.timeout || 60000,
-                onload: (r) => resolve({ status: r.status, text: r.responseText, raw: r.response }),
+                onload: (r) => resolve({ status: r.status, text: r.responseText, raw: r.response, finalUrl: r.finalUrl }),
                 onerror: (e) => reject(new Error('GM 請求失敗（可能是跨域授權被拒，請在 Tampermonkey 彈窗中點「允許」）')),
                 ontimeout: () => reject(new Error('逾時')),
             });
@@ -545,46 +545,50 @@
     }
 
     /* ============================ 搜尋小說 ============================ */
-    // 從文字中猜字數（如「字数：123.4万」或「123.4万字」）
+    // 從文字中猜字數（如「字数：123.4万」或「123.4万字」，含逗號千分位）
     function pickWordCount(text) {
-        const m = text.match(/(?:字数|字數|全文字数|總字數)[:：]?\s*([\d.]+\s*[萬万]?)/i) || text.match(/([\d.]+\s*[萬万]字)/);
-        return m ? m[1].replace(/\s+/g, '') : '';
+        const m = text.match(/(?:字数|字數|全文字数|總字數)[:：]?\s*([\d,.]+\s*[萬万]?)/i) || text.match(/([\d,.]+\s*[萬万]字)/);
+        return m ? m[1].replace(/[\s,]/g, '') : '';
     }
 
-    // uukanshu.cc 搜尋（GET，多候選端點），GM_xmlhttpRequest 跨域 + DOMParser 解析
+    // uukanshu.cc 搜尋（正確端點 /search?searchkey=）；GM_xmlhttpRequest 跨域 + DOMParser 解析
     async function searchUukanshu(q, onLog) {
-        const kw = encodeURIComponent(q);
-        const candidates = [
-            'https://uukanshu.cc/book/search?searchkey=' + kw,
-            'https://uukanshu.cc/search?wd=' + kw,
-            'https://uukanshu.cc/s.php?searchkey=' + kw,
-        ];
-        for (const url of candidates) {
-            try {
-                const res = await gmRequest({ method: 'GET', url, headers: { 'Accept': 'text/html' } });
-                if (res.status !== 200) continue;
-                const doc = new DOMParser().parseFromString(res.text, 'text/html');
-                const results = [];
-                const seen = new Set();
-                doc.querySelectorAll('a[href]').forEach(a => {
-                    const href = a.getAttribute('href') || '';
-                    const abs = norm(href, url);
-                    if (!/\/book\/(\d+)\/?$/i.test(abs)) return;
-                    const key = abs.replace(/\/$/, '');
-                    if (seen.has(key)) return;
-                    seen.add(key);
-                    let title = (a.textContent || '').replace(/\s+/g, ' ').trim();
-                    if (!title) title = (a.getAttribute('title') || '').trim();
-                    if (!title) return;
-                    const ctx = ((a.closest('li, tr, div'))?.textContent || '').replace(/\s+/g, ' ');
-                    results.push({ title: title.slice(0, 60), bookUrl: abs, note: pickWordCount(ctx) });
-                });
-                if (results.length) return results.slice(0, 20);
-            } catch (e) {
-                /* 嘗試下一個候選端點 */
+        const url = 'https://uukanshu.cc/search?searchkey=' + encodeURIComponent(q);
+        try {
+            const res = await gmRequest({ method: 'GET', url, headers: { 'Accept': 'text/html' } });
+            if (res.status !== 200) return [];
+            const doc = new DOMParser().parseFromString(res.text, 'text/html');
+
+            // 精確匹配：伺服器直接 302 到書籍詳情頁（finalUrl = /book/數字/），直接回傳該書，避免把側邊欄「其他書」當結果
+            const finalUrl = res.finalUrl || '';
+            const finalBook = finalUrl.match(/\/book\/(\d+)/i);
+            if (finalBook) {
+                const title = (doc.querySelector('h1')?.textContent || '').replace(/\s+/g, ' ').trim();
+                const ctx = (doc.querySelector('.jieshao_content, dd.jieshao_content, .bookintro')?.textContent || doc.body?.textContent || '').replace(/\s+/g, ' ');
+                if (title) return [{ title: title.slice(0, 60), bookUrl: 'https://uukanshu.cc/book/' + finalBook[1] + '/', note: pickWordCount(ctx) }];
             }
+
+            // 模糊匹配：解析結果列表（僅在結果容器內，排除側邊欄/推薦）
+            const results = [];
+            const seen = new Set();
+            const container = doc.querySelector('#sitembox, .newbox, .search-list, #main, .list') || doc;
+            container.querySelectorAll('a[href]').forEach(a => {
+                const href = a.getAttribute('href') || '';
+                const abs = norm(href, url);
+                if (!/\/book\/(\d+)\/?$/i.test(abs)) return;
+                const key = abs.replace(/\/$/, '');
+                if (seen.has(key)) return;
+                seen.add(key);
+                let title = (a.textContent || '').replace(/\s+/g, ' ').trim();
+                if (!title) title = (a.getAttribute('title') || '').trim();
+                if (!title) return;
+                const ctx = ((a.closest('li, tr, div'))?.textContent || '').replace(/\s+/g, ' ');
+                results.push({ title: title.slice(0, 60), bookUrl: abs, note: pickWordCount(ctx) });
+            });
+            return results.slice(0, 20);
+        } catch (e) {
+            return [];
         }
-        return [];
     }
 
     /* ============================ UI 面板 ============================ */
