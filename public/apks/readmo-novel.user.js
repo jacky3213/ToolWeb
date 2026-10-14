@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說傳書 (Novel → Readmoo)
 // @namespace    https://github.com/jacky3213
-// @version      0.3.2
+// @version      0.3.3
 // @updateURL     https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @downloadURL   https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @description  一鍵抓取整本小說 → 打包 EPUB → 自動上傳到 Readmoo (mooInk) 書櫃。全程在你的瀏覽器執行，繞過 Cloudflare / Cognito WAF 對伺服器 IP 的封鎖。
@@ -582,6 +582,18 @@
         return m ? m[1].replace(/[\s,]/g, '') : '';
     }
 
+    // 從書名連結往上找含「字數」的容器，提取字數
+    function extractWordCount(a) {
+        let node = a.parentElement;
+        for (let i = 0; i < 6 && node; i++) {
+            const txt = (node.textContent || '').replace(/\s+/g, ' ');
+            const wc = pickWordCount(txt);
+            if (wc) return wc;
+            node = node.parentElement;
+        }
+        return '';
+    }
+
     // 通用：從搜索結果 HTML 解析書籍連結（bookRe 匹配書根網址）
     function extractBookLinks(doc, baseUrl, bookRe, siteName) {
         const results = [];
@@ -598,8 +610,7 @@
             let title = (a.textContent || '').replace(/\s+/g, ' ').trim();
             if (!title) title = (a.getAttribute('title') || '').trim();
             if (!title) return;
-            const ctx = ((a.closest('li, tr, div'))?.textContent || '').replace(/\s+/g, ' ');
-            results.push({ title: title.slice(0, 60), bookUrl: abs, note: pickWordCount(ctx), siteName });
+            results.push({ title: title.slice(0, 60), bookUrl: abs, note: extractWordCount(a), siteName });
         });
         return results.slice(0, 20);
     }
@@ -662,13 +673,14 @@
         ] },
     ];
 
-    async function searchAll(q) {
-        const results = await Promise.allSettled(SEARCH_SITES.map(s => searchSite(q, s)));
+    async function searchAll(q, sites) {
+        const list = sites || SEARCH_SITES;
+        const results = await Promise.allSettled(list.map(s => searchSite(q, s)));
         const merged = [];
         const errors = [];
         results.forEach((r, i) => {
             if (r.status === 'fulfilled') merged.push(...r.value);
-            else errors.push(SEARCH_SITES[i].name);
+            else errors.push(list[i].name);
         });
         if (!merged.length && errors.length) throw new Error('搜尋失敗（' + errors.join('、') + ' 無回應）');
         return merged;
@@ -696,7 +708,14 @@
         </style>
         <div class="nr-fab">${canCrawl ? '📤 傳書到 Readmoo' : '🔍 搜尋小說'}</div>
         <div class="nr-box">
-          <div style="font-weight:700;margin-bottom:6px">🔍 搜尋小說（多站）</div>
+          <div style="font-weight:700;margin-bottom:6px">🔍 搜尋小說</div>
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+            <select id="nr-search-site" style="flex:1;background:#151b2b;border:1px solid rgba(255,255,255,.14);border-radius:8px;padding:6px 8px;color:#fff;font-size:12px">
+              <option value="">全部站點</option>
+              <option value="uukanshu.cc">uukanshu.cc（UU看書）</option>
+              <option value="twkan.com">twkan.com（台灣小說網）</option>
+            </select>
+          </div>
           <div style="display:flex;gap:6px">
             <input id="nr-search-q" placeholder="輸入小說名…" style="flex:1;margin:0">
             <button id="nr-search-btn" style="white-space:nowrap">搜尋</button>
@@ -738,12 +757,14 @@
         const doSearch = async () => {
             if (searching) return;
             const q = host.querySelector('#nr-search-q').value.trim();
+            const siteName = host.querySelector('#nr-search-site').value;
             if (!q) { alert('請輸入小說名'); return; }
             searching = true;
             resultsEl.textContent = '搜尋中…';
             let results;
             try {
-                results = await searchAll(q);
+                const sites = siteName ? SEARCH_SITES.filter(s => s.name === siteName) : SEARCH_SITES;
+                results = await searchAll(q, sites);
             } catch (e) {
                 resultsEl.textContent = '搜尋失敗：' + (e && e.message ? e.message : e);
                 searching = false;
