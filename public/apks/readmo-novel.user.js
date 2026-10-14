@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說傳書 (Novel → Readmoo)
 // @namespace    https://github.com/jacky3213
-// @version      0.1.11
+// @version      0.2.0
 // @updateURL     https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @downloadURL   https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @description  一鍵抓取整本小說 → 打包 EPUB → 自動上傳到 Readmoo (mooInk) 書櫃。全程在你的瀏覽器執行，繞過 Cloudflare / Cognito WAF 對伺服器 IP 的封鎖。
@@ -14,6 +14,7 @@
 // @grant        GM_setValue
 // @connect      api.readmoo.com
 // @connect      amazonaws.com
+// @connect      uukanshu.cc
 // @connect      *
 // @require      https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js
 // @require      https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js
@@ -72,13 +73,13 @@
             }
         }
     }
-    if (!SITE) return;
-
+    // 即使非書頁也繼續執行（提供「搜尋小說」入口）；只有 canCrawl 才具備抓取能力
     const norm = (u, base) => { try { return new URL(u, base || location.href).href.split('#')[0]; } catch (e) { return String(u || '').split('#')[0]; } };
-    const bookId = (location.pathname.match(SITE.bookIdRe) || [])[1];
-    if (!bookId) return;
-    const bookPrefix = SITE.bookPrefix + bookId + '/';
+    const bookId = SITE ? (location.pathname.match(SITE.bookIdRe) || [])[1] : null;
+    const canCrawl = !!(SITE && bookId);
+    const bookPrefix = canCrawl ? SITE.bookPrefix + bookId + '/' : '';
     const sameBook = (u) => {
+        if (!canCrawl) return false;
         try {
             const x = new URL(u, location.href);
             if (x.hostname.replace(/^www\./, '') !== hostname) return false;
@@ -107,7 +108,7 @@
     const VOLUME_CHAPTERS = 200;
     const VOLUME_CHARS = 900000;
     // 斷點續傳：依「站點:書id」命名空間
-    const resumeKey = () => 'nr_resume_' + hostname + ':' + bookId;
+    const resumeKey = () => 'nr_resume_' + hostname + ':' + (bookId || '');
 
     // 同源章節頁：優先頁面原生 fetch（帶完整 cookie 與瀏覽器特徵，反 403）
     // 遇到 429 時指數退避重試（30s/60s/120s/240s），避免被封鎖後整本失敗
@@ -543,6 +544,49 @@
         return { interrupted: false, done, volumeIdx: vIdx, hitLimit };
     }
 
+    /* ============================ 搜尋小說 ============================ */
+    // 從文字中猜字數（如「字数：123.4万」或「123.4万字」）
+    function pickWordCount(text) {
+        const m = text.match(/(?:字数|字數|全文字数|總字數)[:：]?\s*([\d.]+\s*[萬万]?)/i) || text.match(/([\d.]+\s*[萬万]字)/);
+        return m ? m[1].replace(/\s+/g, '') : '';
+    }
+
+    // uukanshu.cc 搜尋（GET，多候選端點），GM_xmlhttpRequest 跨域 + DOMParser 解析
+    async function searchUukanshu(q, onLog) {
+        const kw = encodeURIComponent(q);
+        const candidates = [
+            'https://uukanshu.cc/book/search?searchkey=' + kw,
+            'https://uukanshu.cc/search?wd=' + kw,
+            'https://uukanshu.cc/s.php?searchkey=' + kw,
+        ];
+        for (const url of candidates) {
+            try {
+                const res = await gmRequest({ method: 'GET', url, headers: { 'Accept': 'text/html' } });
+                if (res.status !== 200) continue;
+                const doc = new DOMParser().parseFromString(res.text, 'text/html');
+                const results = [];
+                const seen = new Set();
+                doc.querySelectorAll('a[href]').forEach(a => {
+                    const href = a.getAttribute('href') || '';
+                    const abs = norm(href, url);
+                    if (!/\/book\/(\d+)\/?$/i.test(abs)) return;
+                    const key = abs.replace(/\/$/, '');
+                    if (seen.has(key)) return;
+                    seen.add(key);
+                    let title = (a.textContent || '').replace(/\s+/g, ' ').trim();
+                    if (!title) title = (a.getAttribute('title') || '').trim();
+                    if (!title) return;
+                    const ctx = ((a.closest('li, tr, div'))?.textContent || '').replace(/\s+/g, ' ');
+                    results.push({ title: title.slice(0, 60), bookUrl: abs, note: pickWordCount(ctx) });
+                });
+                if (results.length) return results.slice(0, 20);
+            } catch (e) {
+                /* 嘗試下一個候選端點 */
+            }
+        }
+        return [];
+    }
+
     /* ============================ UI 面板 ============================ */
     function injectUi(onStart) {
         if (document.getElementById('nr-panel')) return;
@@ -551,43 +595,93 @@
         host.innerHTML = `
         <style>
           #nr-panel .nr-fab{position:fixed;right:18px;bottom:18px;z-index:2147483000;background:#f59e0b;color:#0f172a;font:bold 13px/1 system-ui,sans-serif;padding:10px 14px;border-radius:10px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.35)}
-          #nr-panel .nr-box{position:fixed;right:18px;bottom:64px;z-index:2147483000;width:320px;max-width:92vw;background:#0b0f1a;color:#e2e8f0;border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:14px;font:13px/1.5 system-ui,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.5);display:none}
+          #nr-panel .nr-box{position:fixed;right:18px;bottom:64px;z-index:2147483000;width:340px;max-width:92vw;max-height:80vh;overflow:auto;background:#0b0f1a;color:#e2e8f0;border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:14px;font:13px/1.5 system-ui,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.5);display:none}
           #nr-panel .nr-box.open{display:block}
           #nr-panel input{width:100%;box-sizing:border-box;background:#151b2b;border:1px solid rgba(255,255,255,.14);border-radius:8px;padding:8px 10px;color:#fff;font-size:13px;margin:4px 0}
           #nr-panel button{background:#f59e0b;color:#0f172a;border:0;border-radius:8px;padding:8px 12px;font-weight:700;cursor:pointer;font-size:13px}
           #nr-panel .nr-log{max-height:180px;overflow:auto;background:#00000055;border-radius:8px;padding:8px;margin-top:8px;font:11px/1.5 monospace;color:#94a3b8;white-space:pre-wrap}
           #nr-panel .nr-bar{height:6px;background:#1e293b;border-radius:3px;overflow:hidden;margin-top:8px}
           #nr-panel .nr-fill{height:100%;background:#f59e0b;width:0;transition:width .3s}
+          #nr-panel .nr-search-item{display:block;padding:8px 10px;border-radius:8px;background:#151b2b;margin:4px 0;cursor:pointer;color:#e2e8f0}
+          #nr-panel .nr-search-item:hover{background:#1e293b}
+          #nr-panel .nr-search-item .t{font-weight:600}
+          #nr-panel .nr-search-item .m{font-size:11px;color:#94a3b8;margin-top:2px}
         </style>
-        <div class="nr-fab">📤 傳書到 Readmoo</div>
+        <div class="nr-fab">${canCrawl ? '📤 傳書到 Readmoo' : '🔍 搜尋小說'}</div>
         <div class="nr-box">
-          <div style="font-weight:700;margin-bottom:6px">傳書到 Readmoo（mooInk）</div>
-          <div style="font-size:11px;color:#94a3b8;margin-bottom:8px">抓取整本 → 打包 EPUB → 上傳到你的書櫃。帳密只在本地使用，不上傳到任何伺服器。</div>
-          <input id="nr-email" type="email" placeholder="Readmoo 帳號（Email）" autocomplete="username">
-          <input id="nr-pass" type="password" placeholder="Readmoo 密碼" autocomplete="current-password">
-          <label style="font-size:11px;color:#94a3b8;display:flex;gap:6px;align-items:center"><input id="nr-remember" type="checkbox" style="width:auto"> 記住帳號（密碼不儲存）</label>
-          <label style="font-size:11px;color:#94a3b8;display:flex;gap:6px;align-items:center;margin:4px 0">
-            <span>抓取速度</span>
-            <select id="nr-speed" style="flex:1;background:#151b2b;border:1px solid rgba(255,255,255,.14);border-radius:8px;padding:6px 8px;color:#fff;font-size:12px">
-              <option value="slow">慢（最穩，約 2.5~3.5 秒/章）</option>
-              <option value="medium">中（約 1.2~1.7 秒/章）</option>
-              <option value="fast">快（約 0.5~0.8 秒/章，易被限流）</option>
-            </select>
-          </label>
-          <label style="font-size:11px;color:#94a3b8;display:flex;gap:6px;align-items:center"><input id="nr-fresh" type="checkbox" style="width:auto"> 重新開始（忽略上次斷點）</label>
-          <div id="nr-resume-info" style="font-size:11px;color:#fbbf24;margin:4px 0;display:none"></div>
-          <div style="margin-top:8px;display:flex;gap:8px">
-            <button id="nr-start">開始抓取並上傳</button>
-            <button id="nr-close" style="background:#334155;color:#e2e8f0">關閉</button>
+          <div style="font-weight:700;margin-bottom:6px">🔍 搜尋小說（uukanshu.cc）</div>
+          <div style="display:flex;gap:6px">
+            <input id="nr-search-q" placeholder="輸入小說名…" style="flex:1;margin:0">
+            <button id="nr-search-btn" style="white-space:nowrap">搜尋</button>
           </div>
-          <div class="nr-bar"><div class="nr-fill" id="nr-fill"></div></div>
-          <div class="nr-log" id="nr-log"></div>
+          <div id="nr-search-results" style="margin-top:8px"></div>
+          <div id="nr-crawl" style="${canCrawl ? '' : 'display:none'}">
+            <div style="font-weight:700;margin:12px 0 6px">📤 傳書到 Readmoo（mooInk）</div>
+            <div style="font-size:11px;color:#94a3b8;margin-bottom:8px">抓取整本 → 打包 EPUB → 上傳到你的書櫃。帳密只在本地使用，不上傳到任何伺服器。</div>
+            <input id="nr-email" type="email" placeholder="Readmoo 帳號（Email）" autocomplete="username">
+            <input id="nr-pass" type="password" placeholder="Readmoo 密碼" autocomplete="current-password">
+            <label style="font-size:11px;color:#94a3b8;display:flex;gap:6px;align-items:center"><input id="nr-remember" type="checkbox" style="width:auto"> 記住帳號（密碼不儲存）</label>
+            <label style="font-size:11px;color:#94a3b8;display:flex;gap:6px;align-items:center;margin:4px 0">
+              <span>抓取速度</span>
+              <select id="nr-speed" style="flex:1;background:#151b2b;border:1px solid rgba(255,255,255,.14);border-radius:8px;padding:6px 8px;color:#fff;font-size:12px">
+                <option value="slow">慢（最穩，約 2.5~3.5 秒/章）</option>
+                <option value="medium">中（約 1.2~1.7 秒/章）</option>
+                <option value="fast">快（約 0.5~0.8 秒/章，易被限流）</option>
+              </select>
+            </label>
+            <label style="font-size:11px;color:#94a3b8;display:flex;gap:6px;align-items:center"><input id="nr-fresh" type="checkbox" style="width:auto"> 重新開始（忽略上次斷點）</label>
+            <div id="nr-resume-info" style="font-size:11px;color:#fbbf24;margin:4px 0;display:none"></div>
+            <div style="margin-top:8px;display:flex;gap:8px">
+              <button id="nr-start">開始抓取並上傳</button>
+            </div>
+            <div class="nr-bar"><div class="nr-fill" id="nr-fill"></div></div>
+            <div class="nr-log" id="nr-log"></div>
+          </div>
+          <button id="nr-close" style="width:100%;margin-top:10px;background:#334155;color:#e2e8f0">關閉</button>
         </div>`;
         document.body.appendChild(host);
         const fab = host.querySelector('.nr-fab');
         const box = host.querySelector('.nr-box');
         fab.onclick = () => box.classList.toggle('open');
         host.querySelector('#nr-close').onclick = () => box.classList.remove('open');
+
+        // 搜尋邏輯
+        const resultsEl = host.querySelector('#nr-search-results');
+        const doSearch = async () => {
+            const q = host.querySelector('#nr-search-q').value.trim();
+            if (!q) { alert('請輸入小說名'); return; }
+            resultsEl.innerHTML = '<div style="color:#94a3b8;font-size:12px">搜尋中…</div>';
+            let results;
+            try {
+                results = await searchUukanshu(q);
+            } catch (e) {
+                resultsEl.innerHTML = '<div style="color:#f87171;font-size:12px">搜尋失敗：' + (e && e.message ? e.message : e) + '</div>';
+                return;
+            }
+            if (!results.length) {
+                resultsEl.innerHTML = '<div style="color:#94a3b8;font-size:12px">找不到結果，換個關鍵字試試。</div>';
+                return;
+            }
+            resultsEl.innerHTML = '';
+            results.forEach(r => {
+                const item = document.createElement('div');
+                item.className = 'nr-search-item';
+                const t = document.createElement('div');
+                t.className = 't';
+                t.textContent = r.title;
+                const m = document.createElement('div');
+                m.className = 'm';
+                m.textContent = (r.note ? '字數 ' + r.note + ' · ' : '') + '點擊前往書頁抓取';
+                item.appendChild(t);
+                item.appendChild(m);
+                item.onclick = () => { location.href = r.bookUrl; };
+                resultsEl.appendChild(item);
+            });
+        };
+        host.querySelector('#nr-search-btn').onclick = doSearch;
+        host.querySelector('#nr-search-q').onkeydown = (e) => { if (e.key === 'Enter') doSearch(); };
+
+        // 抓取欄位初始化
         host.querySelector('#nr-email').value = GM_getValue('nr_email', '');
         host.querySelector('#nr-remember').checked = !!GM_getValue('nr_email', '');
         host.querySelector('#nr-speed').value = GM_getValue('nr_speed', 'slow');
