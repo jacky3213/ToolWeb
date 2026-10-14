@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說傳書 (Novel → Readmoo)
 // @namespace    https://github.com/jacky3213
-// @version      0.2.2
+// @version      0.3.0
 // @updateURL     https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @downloadURL   https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @description  一鍵抓取整本小說 → 打包 EPUB → 自動上傳到 Readmoo (mooInk) 書櫃。全程在你的瀏覽器執行，繞過 Cloudflare / Cognito WAF 對伺服器 IP 的封鎖。
@@ -73,18 +73,24 @@
             }
         }
     }
-    // 即使非書頁也繼續執行（提供「搜尋小說」入口）；只有 canCrawl 才具備抓取能力
+    // 即使非書頁也繼續執行（提供「搜尋小說」入口）；bookCtx 代表當前要抓的書
     const norm = (u, base) => { try { return new URL(u, base || location.href).href.split('#')[0]; } catch (e) { return String(u || '').split('#')[0]; } };
     const bookId = SITE ? (location.pathname.match(SITE.bookIdRe) || [])[1] : null;
     const canCrawl = !!(SITE && bookId);
-    const bookPrefix = canCrawl ? SITE.bookPrefix + bookId + '/' : '';
+    // 當前要抓的書上下文：書頁由 location 推導；搜索選書後覆蓋為選中的書（原地抓取，不跳轉）
+    let bookCtx = canCrawl ? {
+        SITE: SITE,
+        bookId: bookId,
+        bookUrl: location.origin + SITE.bookPrefix + bookId + '/',
+        bookKey: hostname + ':' + bookId,
+    } : null;
     const sameBook = (u) => {
-        if (!canCrawl) return false;
+        if (!bookCtx) return false;
+        const prefix = bookCtx.SITE.bookPrefix + bookCtx.bookId + '/';
         try {
-            const x = new URL(u, location.href);
-            if (x.hostname.replace(/^www\./, '') !== hostname) return false;
-            return x.pathname.toLowerCase().startsWith(bookPrefix.toLowerCase()) &&
-                x.pathname.slice(bookPrefix.length).replace(/\/+$/, '').length > 0;
+            const x = new URL(u, bookCtx.bookUrl);
+            return x.pathname.toLowerCase().startsWith(prefix.toLowerCase()) &&
+                x.pathname.slice(prefix.length).replace(/\/+$/, '').length > 0;
         } catch (e) { return false; }
     };
 
@@ -108,53 +114,59 @@
     const VOLUME_CHAPTERS = 200;
     const VOLUME_CHARS = 900000;
     // 斷點續傳：依「站點:書id」命名空間
-    const resumeKey = () => 'nr_resume_' + hostname + ':' + (bookId || '');
+    const resumeKey = () => 'nr_resume_' + (bookCtx ? bookCtx.bookKey : hostname + ':');
 
-    // 同源章節頁：優先頁面原生 fetch（帶完整 cookie 與瀏覽器特徵，反 403）
-    // 遇到 429 時指數退避重試（30s/60s/120s/240s），避免被封鎖後整本失敗
+    // 抓取頁面：同源用 fetch（帶完整 cookie），跨域用 GM_xmlhttpRequest（arraybuffer 解碼 GBK/UTF-8）
+    // 遇到 429 時指數退避重試（30s/60s/120s），避免被封鎖後整本失敗
     async function fetchPage(url, onLog) {
         const MAX_ATTEMPTS = 4; // 首次 + 3 次重試，共 4 次請求
+        const sameOrigin = (() => { try { return new URL(url).origin === location.origin; } catch (e) { return false; } })();
         let lastErr;
         for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-            let res;
+            let status, buf;
             try {
-                res = await fetch(url, { credentials: 'include' });
+                if (sameOrigin) {
+                    const res = await fetch(url, { credentials: 'include' });
+                    status = res.status;
+                    if (status === 200) buf = await res.arrayBuffer();
+                } else {
+                    const res = await gmRequest({ method: 'GET', url, headers: { 'Accept': 'text/html' }, responseType: 'arraybuffer' });
+                    status = res.status;
+                    if (status === 200) buf = res.raw;
+                }
             } catch (e) {
                 lastErr = e;
                 if (attempt === MAX_ATTEMPTS - 1) break;
                 await sleep(2000 * (attempt + 1));
                 continue;
             }
-            if (res.status === 429) {
+            if (status === 429) {
                 if (attempt === MAX_ATTEMPTS - 1) { lastErr = new Error('HTTP 429'); break; }
                 const wait = 30000 * Math.pow(2, attempt); // 30s / 60s / 120s（最後一次不再空等）
                 if (onLog) onLog('⚠ HTTP 429 被限流，等待 ' + Math.round(wait / 1000) + ' 秒後重試…');
                 await sleep(wait);
                 continue;
             }
-            if (!res.ok) {
-                lastErr = new Error('HTTP ' + res.status);
+            if (status !== 200) {
+                lastErr = new Error('HTTP ' + status);
                 if (attempt === MAX_ATTEMPTS - 1) break;
                 await sleep(2000 * (attempt + 1));
                 continue;
             }
-            const buf = await res.arrayBuffer();
-            const ct = (res.headers.get('content-type') || '').toLowerCase();
+            // 解碼：先 UTF-8，出現大量替換字元（\ufffd）時改用 GBK
             let text;
             try {
                 text = new TextDecoder('utf-8', { fatal: false }).decode(buf);
-                if (ct.includes('gbk') || ct.includes('gb2312') || /[\ufffd]{3,}/.test(text)) {
-                    text = new TextDecoder('gbk', { fatal: false }).decode(buf);
-                }
+                if (/[\ufffd]{3,}/.test(text)) text = new TextDecoder('gbk', { fatal: false }).decode(buf);
             } catch (e) {
                 text = new TextDecoder('utf-8').decode(buf);
             }
-            return { text, url: res.url };
+            return { text, url };
         }
         throw lastErr || new Error('HTTP 429 重試仍失敗，可能被暫時封鎖，請稍後再試');
     }
 
-    // 跨域（Cognito / api.readmoo.com / S3）用 GM_xmlhttpRequest
+    // 跨域（Cognito / api.readmoo.com / S3 / 小說站）用 GM_xmlhttpRequest
     function gmRequest(opt) {
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
@@ -163,6 +175,7 @@
                 headers: opt.headers || {},
                 data: opt.data,
                 binary: !!opt.binary,
+                responseType: opt.responseType,
                 timeout: opt.timeout || 60000,
                 onload: (r) => resolve({ status: r.status, text: r.responseText, raw: r.response, finalUrl: r.finalUrl }),
                 onerror: (e) => reject(new Error('GM 請求失敗（可能是跨域授權被拒，請在 Tampermonkey 彈窗中點「允許」）')),
@@ -407,8 +420,8 @@
     /* ============================ 爬整本 ============================ */
     function findNextLink(rootDoc, pageUrl) {
         const doc = rootDoc;
-        if (SITE.nextLinkSelector) {
-            const el = doc.querySelector(SITE.nextLinkSelector);
+        if (bookCtx && bookCtx.SITE.nextLinkSelector) {
+            const el = doc.querySelector(bookCtx.SITE.nextLinkSelector);
             if (el) return el.getAttribute('href');
         }
         const cands = [...doc.querySelectorAll('a[href]')].filter(a => {
@@ -488,18 +501,18 @@
                 // 斷點：nextUrl 指向「第一個未上傳章節」；done 只算已上傳
                 const resumeUrl = volumeChapters.length ? (volumeStartUrl || url) : url;
                 const resumeDone = done - volumeChapters.length;
-                GM_setValue(rk, { bookKey: hostname + ':' + bookId, nextUrl: resumeUrl, doneChapters: resumeDone, volumeIdx: vIdx });
+                GM_setValue(rk, { bookKey: bookCtx.bookKey, nextUrl: resumeUrl, doneChapters: resumeDone, volumeIdx: vIdx });
                 log('已上傳 ' + vIdx + ' 卷；斷點已保存，可再次點「開始」接續（從第 ' + (resumeDone + 1) + ' 段起）。');
                 return { interrupted: true, done: resumeDone, volumeIdx: vIdx };
             }
             const doc = new DOMParser().parseFromString(parsed.text, 'text/html');
             let title = '';
-            for (const sel of SITE.titleSelector.split(',')) {
+            for (const sel of bookCtx.SITE.titleSelector.split(',')) {
                 const el = doc.querySelector(sel.trim());
                 if (el && el.textContent.trim()) { title = el.textContent.replace(/\s+/g, ' ').trim(); break; }
             }
             let content = '';
-            for (const sel of SITE.contentSelector.split(',')) {
+            for (const sel of bookCtx.SITE.contentSelector.split(',')) {
                 const el = doc.querySelector(sel.trim());
                 if (el) { const t = el.textContent.replace(/\u00a0/g, ' ').split(/\r?\n/).map(l => l.trim()).filter(Boolean).join('\n'); if (t.length > 50) { content = t; break; } }
             }
@@ -531,7 +544,7 @@
                     await flushVolume();
                 } catch (fe) {
                     log('✗ 上傳失敗：' + (fe && fe.message ? fe.message : fe));
-                    GM_setValue(rk, { bookKey: hostname + ':' + bookId, nextUrl: volumeChapters.length ? (volumeStartUrl || url) : url, doneChapters: done - volumeChapters.length, volumeIdx: vIdx });
+                    GM_setValue(rk, { bookKey: bookCtx.bookKey, nextUrl: volumeChapters.length ? (volumeStartUrl || url) : url, doneChapters: done - volumeChapters.length, volumeIdx: vIdx });
                     log('斷點已保存（從第 ' + (done - volumeChapters.length + 1) + ' 段起），可再次點「開始」接續。');
                     return { interrupted: true, done: done - volumeChapters.length, volumeIdx: vIdx };
                 }
@@ -541,7 +554,7 @@
             url = norm(next, parsed.url);
             if (!sameBook(url)) { log('下一章指向其他書/站，停止'); break; }
             // 斷點：nextUrl 指向「第一個未上傳章節」，done 只算已上傳
-            GM_setValue(rk, { bookKey: hostname + ':' + bookId, nextUrl: volumeChapters.length ? (volumeStartUrl || url) : url, doneChapters: done - volumeChapters.length, volumeIdx: vIdx });
+            GM_setValue(rk, { bookKey: bookCtx.bookKey, nextUrl: volumeChapters.length ? (volumeStartUrl || url) : url, doneChapters: done - volumeChapters.length, volumeIdx: vIdx });
             const sp = SPEED_PRESETS[currentSpeed] || SPEED_PRESETS.slow;
             await sleep(sp.delay + Math.random() * sp.jitter);
         }
@@ -551,7 +564,7 @@
         } catch (fe) {
             log('✗ 上傳失敗：' + (fe && fe.message ? fe.message : fe));
             if (volumeChapters.length) {
-                GM_setValue(rk, { bookKey: hostname + ':' + bookId, nextUrl: volumeStartUrl || url, doneChapters: done - volumeChapters.length, volumeIdx: vIdx });
+                GM_setValue(rk, { bookKey: bookCtx.bookKey, nextUrl: volumeStartUrl || url, doneChapters: done - volumeChapters.length, volumeIdx: vIdx });
                 log('斷點已保存（從第 ' + (done - volumeChapters.length + 1) + ' 段起），可再次點「開始」接續。');
                 return { interrupted: true, done: done - volumeChapters.length, volumeIdx: vIdx };
             }
@@ -704,10 +717,24 @@
                 t.textContent = r.title;
                 const m = document.createElement('div');
                 m.className = 'm';
-                m.textContent = (r.note ? '字數 ' + r.note + ' · ' : '') + '點擊前往書頁抓取';
+                m.textContent = (r.note ? '字數 ' + r.note + ' · ' : '') + '點擊後在本面板直接抓取上傳';
                 item.appendChild(t);
                 item.appendChild(m);
-                item.onclick = () => { location.href = r.bookUrl; };
+                item.onclick = () => {
+                    // 原地抓取：設定 bookCtx，顯示抓取區塊，不跳轉
+                    const bid = (r.bookUrl.match(/\/book\/(\d+)/i) || [])[1] || '';
+                    const bookHost = (() => { try { return new URL(r.bookUrl).hostname.replace(/^www\./, ''); } catch (e) { return 'uukanshu.cc'; } })();
+                    const site = SITES[bookHost] || SITES['uukanshu.cc'];
+                    bookCtx = {
+                        SITE: site,
+                        bookId: bid,
+                        bookUrl: r.bookUrl.replace(/\/?$/, '/'),
+                        bookKey: bookHost + ':' + bid,
+                    };
+                    const crawlEl = host.querySelector('#nr-crawl');
+                    if (crawlEl) crawlEl.style.display = '';
+                    resultsEl.textContent = '已選：《' + r.title + '》，請在下方輸入 Readmoo 帳密開始抓取。';
+                };
                 resultsEl.appendChild(item);
             });
             searching = false;
@@ -746,7 +773,7 @@
 
     /* ============================ 主流程 ============================ */
     injectUi(async (email, password, speed, fresh, host) => {
-        if (!canCrawl || !SITE || !bookId) { alert('請在小說章節頁開啟本腳本才能抓取'); return; }
+        if (!bookCtx) { alert('請先搜尋並選擇一本小說，或在章節頁開啟本腳本'); return; }
         const logEl = host.querySelector('#nr-log');
         const fillEl = host.querySelector('#nr-fill');
         const startBtn = host.querySelector('#nr-start');
@@ -765,11 +792,11 @@
             // 2) 找第一章：抓書籍頁，取數值最小的章節連結
             log('尋找書籍目錄…');
             setPct(2);
-            const bookUrl = location.origin + SITE.bookPrefix + bookId + '/';
+            const bookUrl = bookCtx.bookUrl;
             const { text: bookText } = await fetchPage(bookUrl, log);
             const bdoc = new DOMParser().parseFromString(bookText, 'text/html');
             let bookTitle = (bdoc.querySelector('h1')?.textContent || document.querySelector('h1')?.textContent || '').replace(/\s+/g, ' ').trim();
-            if (!bookTitle) bookTitle = bookId;
+            if (!bookTitle) bookTitle = bookCtx.bookId;
             const chapterNo = (u) => { const m = u.match(/\/(\d+)[^\d/]*(?:[#?].*)?$/); return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER; };
             let links = new Set();
             bdoc.querySelectorAll('a[href]').forEach(a => { const h = a.getAttribute('href'); if (!h) return; const abs = norm(h, bookUrl); if (sameBook(abs)) links.add(abs); });
@@ -783,12 +810,12 @@
             let startUrl = chapterUrls[0];
             let doneChapters = 0;
             let volumeIdx = 0;
-            if (!fresh && resume && resume.bookKey === (hostname + ':' + bookId) && resume.nextUrl) {
+            if (!fresh && resume && resume.bookKey === bookCtx.bookKey && resume.nextUrl) {
                 startUrl = resume.nextUrl;
                 doneChapters = resume.doneChapters;
                 volumeIdx = resume.volumeIdx;
                 log('⚠ 從上次斷點接續：第 ' + (doneChapters + 1) + ' 段起（已上傳 ' + volumeIdx + ' 卷）');
-            } else if (fresh && resume && resume.bookKey === (hostname + ':' + bookId) && resume.volumeIdx > 0) {
+            } else if (fresh && resume && resume.bookKey === bookCtx.bookKey && resume.volumeIdx > 0) {
                 log('⚠ 已勾選重新開始，將重新上傳，書櫃可能出現同名重複文件。');
             }
 
