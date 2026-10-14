@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說傳書 (Novel → Readmoo)
 // @namespace    https://github.com/jacky3213
-// @version      0.3.1
+// @version      0.3.2
 // @updateURL     https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @downloadURL   https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @description  一鍵抓取整本小說 → 打包 EPUB → 自動上傳到 Readmoo (mooInk) 書櫃。全程在你的瀏覽器執行，繞過 Cloudflare / Cognito WAF 對伺服器 IP 的封鎖。
@@ -604,47 +604,73 @@
         return results.slice(0, 20);
     }
 
-    // 通用：搜尋站點（GET），偵測精確匹配（302→詳情頁）直接回傳該書
+    // 通用：搜尋站點（GET，多候選端點），偵測精確匹配（302→詳情頁）直接回傳該書
     async function searchSite(q, cfg) {
-        const url = cfg.searchUrl(q);
-        const res = await gmRequest({ method: 'GET', url, headers: { 'Accept': 'text/html' } });
-        if (res.status !== 200) throw new Error(cfg.name + ' 搜尋失敗 HTTP ' + res.status);
-        const doc = new DOMParser().parseFromString(res.text, 'text/html');
-        const h1Title = (doc.querySelector('h1')?.textContent || '').replace(/\s+/g, ' ').trim();
-        // 精確匹配偵測：finalUrl → canonical/og:url → 單一 bookId + h1
-        let bookIdMatch = (res.finalUrl || '').match(cfg.bookRe);
-        if (!bookIdMatch) {
-            const canonical = doc.querySelector('link[rel="canonical"]')?.getAttribute('href')
-                || doc.querySelector('meta[property="og:url"]')?.getAttribute('content') || '';
-            bookIdMatch = canonical.match(cfg.bookRe);
+        const urls = cfg.searchUrls(q);
+        let lastErr;
+        for (const url of urls) {
+            try {
+                const res = await gmRequest({ method: 'GET', url, headers: { 'Accept': 'text/html' } });
+                if (res.status !== 200) { lastErr = new Error('HTTP ' + res.status); continue; }
+                const doc = new DOMParser().parseFromString(res.text, 'text/html');
+                const h1Title = (doc.querySelector('h1')?.textContent || '').replace(/\s+/g, ' ').trim();
+                // 精確匹配偵測：finalUrl → canonical/og:url → 「單一 bookId + 章節目錄」
+                let bookIdMatch = (res.finalUrl || '').match(cfg.bookRe);
+                if (!bookIdMatch) {
+                    const canonical = doc.querySelector('link[rel="canonical"]')?.getAttribute('href')
+                        || doc.querySelector('meta[property="og:url"]')?.getAttribute('content') || '';
+                    bookIdMatch = canonical.match(cfg.bookRe);
+                }
+                if (!bookIdMatch && h1Title) {
+                    const ids = new Set();
+                    let chapterCount = 0;
+                    doc.querySelectorAll('a[href]').forEach(a => {
+                        const abs = norm(a.getAttribute('href') || '', url);
+                        const m = abs.match(cfg.bookRe);
+                        if (!m) return;
+                        ids.add(m[1]);
+                        if (new RegExp('/' + m[1] + '/\\d+').test(abs)) chapterCount++;
+                    });
+                    if (ids.size === 1 && chapterCount >= 3) bookIdMatch = [cfg.prefix + [...ids][0], [...ids][0]];
+                }
+                if (bookIdMatch && h1Title) {
+                    const ctx = (doc.querySelector('.jieshao_content, dd.jieshao_content, .bookintro')?.textContent || doc.body?.textContent || '').replace(/\s+/g, ' ');
+                    // bookUrl 從匹配到的子串（含前綴，如 /book/123）原樣重建，避免 prefix 硬編錯誤
+                    let bookUrl = cfg.origin + bookIdMatch[0].replace(/\/+$/, '') + '/';
+                    const finalOrCanonical = res.finalUrl || (doc.querySelector('link[rel="canonical"]')?.getAttribute('href') || '');
+                    const rootMatch = finalOrCanonical.match(/^(https?:\/\/[^/]+\/(?:book|txt)\/\d+\/)/i);
+                    if (rootMatch) bookUrl = rootMatch[1];
+                    return [{ title: h1Title.slice(0, 60), bookUrl, note: pickWordCount(ctx), siteName: cfg.name }];
+                }
+                const list = extractBookLinks(doc, url, cfg.listBookRe, cfg.name);
+                if (list.length) return list;
+                lastErr = new Error('無結果');
+            } catch (e) {
+                lastErr = e;
+            }
         }
-        if (!bookIdMatch && h1Title) {
-            const ids = new Set();
-            doc.querySelectorAll('a[href]').forEach(a => { const m = (a.getAttribute('href') || '').match(cfg.bookRe); if (m) ids.add(m[1]); });
-            if (ids.size === 1) bookIdMatch = ['', [...ids][0]];
-        }
-        if (bookIdMatch && h1Title) {
-            const ctx = (doc.querySelector('.jieshao_content, dd.jieshao_content, .bookintro')?.textContent || doc.body?.textContent || '').replace(/\s+/g, ' ');
-            let bookUrl = cfg.origin + cfg.prefix + bookIdMatch[1] + '/';
-            const finalOrCanonical = res.finalUrl || (doc.querySelector('link[rel="canonical"]')?.getAttribute('href') || '');
-            const rootMatch = finalOrCanonical.match(/^(https?:\/\/[^/]+\/(?:book|txt)\/\d+\/)/i);
-            if (rootMatch) bookUrl = rootMatch[1];
-            return [{ title: h1Title.slice(0, 60), bookUrl, note: pickWordCount(ctx), siteName: cfg.name }];
-        }
-        return extractBookLinks(doc, url, cfg.listBookRe, cfg.name);
+        throw lastErr || new Error(cfg.name + ' 搜尋失敗');
     }
 
-    // 支援的搜尋站點
+    // 支援的搜尋站點（69shu 家族域名已失效，暫不納入）
     const SEARCH_SITES = [
-        { name: 'uukanshu.cc', origin: 'https://uukanshu.cc', prefix: '/book/', bookRe: /\/book\/(\d+)/i, listBookRe: /\/book\/(\d+)\/?$/i, searchUrl: (q) => 'https://uukanshu.cc/search?searchkey=' + encodeURIComponent(q) },
-        { name: 'twkan.com', origin: 'https://twkan.com', prefix: '/txt/', bookRe: /\/txt\/(\d+)/i, listBookRe: /\/txt\/(\d+)\/?$/i, searchUrl: (q) => 'https://twkan.com/search?searchkey=' + encodeURIComponent(q) },
-        { name: '69shu', origin: 'https://www.69shuba.cx', prefix: '/book/', bookRe: /\/(?:book|txt)\/(\d+)/i, listBookRe: /\/(?:book|txt)\/(\d+)\/?$/i, searchUrl: (q) => 'https://www.69shuba.cx/modules/article/search.php?searchkey=' + encodeURIComponent(q) },
+        { name: 'uukanshu.cc', origin: 'https://uukanshu.cc', prefix: '/book/', bookRe: /\/book\/(\d+)/i, listBookRe: /\/book\/(\d+)\/?$/i, searchUrls: (q) => ['https://uukanshu.cc/search?searchkey=' + encodeURIComponent(q)] },
+        { name: 'twkan.com', origin: 'https://twkan.com', prefix: '/txt/', bookRe: /\/txt\/(\d+)/i, listBookRe: /\/txt\/(\d+)\/?$/i, searchUrls: (q) => [
+            'https://twkan.com/search?searchkey=' + encodeURIComponent(q),
+            'https://twkan.com/search?q=' + encodeURIComponent(q),
+            'https://twkan.com/modules/article/search.php?searchkey=' + encodeURIComponent(q),
+        ] },
     ];
 
     async function searchAll(q) {
         const results = await Promise.allSettled(SEARCH_SITES.map(s => searchSite(q, s)));
         const merged = [];
-        results.forEach(r => { if (r.status === 'fulfilled') merged.push(...r.value); });
+        const errors = [];
+        results.forEach((r, i) => {
+            if (r.status === 'fulfilled') merged.push(...r.value);
+            else errors.push(SEARCH_SITES[i].name);
+        });
+        if (!merged.length && errors.length) throw new Error('搜尋失敗（' + errors.join('、') + ' 無回應）');
         return merged;
     }
 
@@ -670,7 +696,7 @@
         </style>
         <div class="nr-fab">${canCrawl ? '📤 傳書到 Readmoo' : '🔍 搜尋小說'}</div>
         <div class="nr-box">
-          <div style="font-weight:700;margin-bottom:6px">🔍 搜尋小說（uukanshu.cc）</div>
+          <div style="font-weight:700;margin-bottom:6px">🔍 搜尋小說（多站）</div>
           <div style="display:flex;gap:6px">
             <input id="nr-search-q" placeholder="輸入小說名…" style="flex:1;margin:0">
             <button id="nr-search-btn" style="white-space:nowrap">搜尋</button>
