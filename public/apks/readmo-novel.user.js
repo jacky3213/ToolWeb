@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小說傳書 (Novel → Readmoo)
 // @namespace    https://github.com/jacky3213
-// @version      0.2.1
+// @version      0.2.2
 // @updateURL     https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @downloadURL   https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks/readmo-novel.user.js
 // @description  一鍵抓取整本小說 → 打包 EPUB → 自動上傳到 Readmoo (mooInk) 書櫃。全程在你的瀏覽器執行，繞過 Cloudflare / Cognito WAF 對伺服器 IP 的封鎖。
@@ -527,7 +527,14 @@
                 log('⚠ 解析不到正文，跳過：' + url);
             }
             if (volumeChapters.length >= VOLUME_CHAPTERS || volumeChars >= VOLUME_CHARS) {
-                await flushVolume();
+                try {
+                    await flushVolume();
+                } catch (fe) {
+                    log('✗ 上傳失敗：' + (fe && fe.message ? fe.message : fe));
+                    GM_setValue(rk, { bookKey: hostname + ':' + bookId, nextUrl: volumeChapters.length ? (volumeStartUrl || url) : url, doneChapters: done - volumeChapters.length, volumeIdx: vIdx });
+                    log('斷點已保存（從第 ' + (done - volumeChapters.length + 1) + ' 段起），可再次點「開始」接續。');
+                    return { interrupted: true, done: done - volumeChapters.length, volumeIdx: vIdx };
+                }
             }
             const next = findNextLink(doc, parsed.url);
             if (!next) break;
@@ -539,7 +546,17 @@
             await sleep(sp.delay + Math.random() * sp.jitter);
         }
         const hitLimit = done >= 5000;
-        await flushVolume();
+        try {
+            await flushVolume();
+        } catch (fe) {
+            log('✗ 上傳失敗：' + (fe && fe.message ? fe.message : fe));
+            if (volumeChapters.length) {
+                GM_setValue(rk, { bookKey: hostname + ':' + bookId, nextUrl: volumeStartUrl || url, doneChapters: done - volumeChapters.length, volumeIdx: vIdx });
+                log('斷點已保存（從第 ' + (done - volumeChapters.length + 1) + ' 段起），可再次點「開始」接續。');
+                return { interrupted: true, done: done - volumeChapters.length, volumeIdx: vIdx };
+            }
+            throw fe;
+        }
         GM_setValue(rk, null);
         return { interrupted: false, done, volumeIdx: vIdx, hitLimit };
     }
@@ -547,48 +564,55 @@
     /* ============================ 搜尋小說 ============================ */
     // 從文字中猜字數（如「字数：123.4万」或「123.4万字」，含逗號千分位）
     function pickWordCount(text) {
-        const m = text.match(/(?:字数|字數|全文字数|總字數)[:：]?\s*([\d,.]+\s*[萬万]?)/i) || text.match(/([\d,.]+\s*[萬万]字)/);
+        const m = text.match(/(?:字数|字數|全文字数|總字數)[:：]?\s*([\d,]+(?:\.\d+)?\s*[萬万]?)/i) || text.match(/([\d,]+(?:\.\d+)?\s*[萬万]字)/);
         return m ? m[1].replace(/[\s,]/g, '') : '';
     }
 
     // uukanshu.cc 搜尋（正確端點 /search?searchkey=）；GM_xmlhttpRequest 跨域 + DOMParser 解析
     async function searchUukanshu(q, onLog) {
         const url = 'https://uukanshu.cc/search?searchkey=' + encodeURIComponent(q);
-        try {
-            const res = await gmRequest({ method: 'GET', url, headers: { 'Accept': 'text/html' } });
-            if (res.status !== 200) return [];
-            const doc = new DOMParser().parseFromString(res.text, 'text/html');
+        const res = await gmRequest({ method: 'GET', url, headers: { 'Accept': 'text/html' } });
+        if (res.status !== 200) throw new Error('搜尋請求失敗 HTTP ' + res.status);
+        const doc = new DOMParser().parseFromString(res.text, 'text/html');
+        const h1Title = (doc.querySelector('h1')?.textContent || '').replace(/\s+/g, ' ').trim();
 
-            // 精確匹配：伺服器直接 302 到書籍詳情頁（finalUrl = /book/數字/），直接回傳該書，避免把側邊欄「其他書」當結果
-            const finalUrl = res.finalUrl || '';
-            const finalBook = finalUrl.match(/\/book\/(\d+)/i);
-            if (finalBook) {
-                const title = (doc.querySelector('h1')?.textContent || '').replace(/\s+/g, ' ').trim();
-                const ctx = (doc.querySelector('.jieshao_content, dd.jieshao_content, .bookintro')?.textContent || doc.body?.textContent || '').replace(/\s+/g, ' ');
-                if (title) return [{ title: title.slice(0, 60), bookUrl: 'https://uukanshu.cc/book/' + finalBook[1] + '/', note: pickWordCount(ctx) }];
-            }
-
-            // 模糊匹配：解析結果列表（僅在結果容器內，排除側邊欄/推薦）
-            const results = [];
-            const seen = new Set();
-            const container = doc.querySelector('#sitembox, .newbox, .search-list, #main, .list') || doc;
-            container.querySelectorAll('a[href]').forEach(a => {
-                const href = a.getAttribute('href') || '';
-                const abs = norm(href, url);
-                if (!/\/book\/(\d+)\/?$/i.test(abs)) return;
-                const key = abs.replace(/\/$/, '');
-                if (seen.has(key)) return;
-                seen.add(key);
-                let title = (a.textContent || '').replace(/\s+/g, ' ').trim();
-                if (!title) title = (a.getAttribute('title') || '').trim();
-                if (!title) return;
-                const ctx = ((a.closest('li, tr, div'))?.textContent || '').replace(/\s+/g, ' ');
-                results.push({ title: title.slice(0, 60), bookUrl: abs, note: pickWordCount(ctx) });
-            });
-            return results.slice(0, 20);
-        } catch (e) {
-            return [];
+        // 精確匹配：伺服器 302 到書籍詳情頁。偵測順序：finalUrl → canonical/og:url → 「單一 bookId + h1」
+        let bookIdMatch = (res.finalUrl || '').match(/\/book\/(\d+)/i);
+        if (!bookIdMatch) {
+            const canonical = doc.querySelector('link[rel="canonical"]')?.getAttribute('href')
+                || doc.querySelector('meta[property="og:url"]')?.getAttribute('content')
+                || '';
+            bookIdMatch = canonical.match(/\/book\/(\d+)/i);
         }
+        if (!bookIdMatch && h1Title) {
+            const ids = new Set();
+            doc.querySelectorAll('a[href*="/book/"]').forEach(a => { const m = (a.getAttribute('href') || '').match(/\/book\/(\d+)/i); if (m) ids.add(m[1]); });
+            if (ids.size === 1) bookIdMatch = ['', [...ids][0]];
+        }
+        if (bookIdMatch && h1Title) {
+            const ctx = (doc.querySelector('.jieshao_content, dd.jieshao_content, .bookintro')?.textContent || doc.body?.textContent || '').replace(/\s+/g, ' ');
+            return [{ title: h1Title.slice(0, 60), bookUrl: 'https://uukanshu.cc/book/' + bookIdMatch[1] + '/', note: pickWordCount(ctx) }];
+        }
+
+        // 模糊匹配：解析結果列表（只在明確結果容器內；無容器時全頁兜底）
+        const results = [];
+        const seen = new Set();
+        const container = doc.querySelector('#sitembox, .newbox, .search-list, .result-list');
+        const links = container ? container.querySelectorAll('a[href]') : doc.querySelectorAll('a[href]');
+        links.forEach(a => {
+            const href = a.getAttribute('href') || '';
+            const abs = norm(href, url);
+            if (!/\/book\/(\d+)\/?$/i.test(abs)) return;
+            const key = abs.replace(/\/$/, '');
+            if (seen.has(key)) return;
+            seen.add(key);
+            let title = (a.textContent || '').replace(/\s+/g, ' ').trim();
+            if (!title) title = (a.getAttribute('title') || '').trim();
+            if (!title) return;
+            const ctx = ((a.closest('li, tr, div'))?.textContent || '').replace(/\s+/g, ' ');
+            results.push({ title: title.slice(0, 60), bookUrl: abs, note: pickWordCount(ctx) });
+        });
+        return results.slice(0, 20);
     }
 
     /* ============================ UI 面板 ============================ */
@@ -651,19 +675,24 @@
 
         // 搜尋邏輯
         const resultsEl = host.querySelector('#nr-search-results');
+        let searching = false;
         const doSearch = async () => {
+            if (searching) return;
             const q = host.querySelector('#nr-search-q').value.trim();
             if (!q) { alert('請輸入小說名'); return; }
-            resultsEl.innerHTML = '<div style="color:#94a3b8;font-size:12px">搜尋中…</div>';
+            searching = true;
+            resultsEl.textContent = '搜尋中…';
             let results;
             try {
                 results = await searchUukanshu(q);
             } catch (e) {
-                resultsEl.innerHTML = '<div style="color:#f87171;font-size:12px">搜尋失敗：' + (e && e.message ? e.message : e) + '</div>';
+                resultsEl.textContent = '搜尋失敗：' + (e && e.message ? e.message : e);
+                searching = false;
                 return;
             }
             if (!results.length) {
-                resultsEl.innerHTML = '<div style="color:#94a3b8;font-size:12px">找不到結果，換個關鍵字試試。</div>';
+                resultsEl.textContent = '找不到結果，換個關鍵字試試。';
+                searching = false;
                 return;
             }
             resultsEl.innerHTML = '';
@@ -681,6 +710,7 @@
                 item.onclick = () => { location.href = r.bookUrl; };
                 resultsEl.appendChild(item);
             });
+            searching = false;
         };
         host.querySelector('#nr-search-btn').onclick = doSearch;
         host.querySelector('#nr-search-q').onkeydown = (e) => { if (e.key === 'Enter') doSearch(); };
@@ -716,6 +746,7 @@
 
     /* ============================ 主流程 ============================ */
     injectUi(async (email, password, speed, fresh, host) => {
+        if (!canCrawl || !SITE || !bookId) { alert('請在小說章節頁開啟本腳本才能抓取'); return; }
         const logEl = host.querySelector('#nr-log');
         const fillEl = host.querySelector('#nr-fill');
         const startBtn = host.querySelector('#nr-start');
