@@ -1059,11 +1059,21 @@ async function startServer() {
       }
 
       if (fs.existsSync(localFilePath)) {
-        // Count the install/download only for real navigations (Sec-Fetch-Dest: document).
-        // Skip fetch() requests from the in-site script preview viewer to avoid inflated counts.
-        const secFetchDest = (req.headers['sec-fetch-dest'] as string) || 'document';
-        if (secFetchDest === 'document') {
-          const linkedTool = apkToolsStore.find(t => t.scriptFileName === filename || t.downloadUrl === `/api/download/${filename}`);
+        // Count every install/download request by default.
+        // FIX: the old `Sec-Fetch-Dest === 'document'` filter silently dropped EVERY
+        // Tampermonkey install. Tampermonkey cancels the .user.js main-frame navigation in
+        // onBeforeRequest and re-fetches the script itself, so the request that actually
+        // reaches this route carries `Sec-Fetch-Dest: empty` — it was never counted.
+        // The in-site preview viewer (檢視腳本源代碼) now marks itself explicitly with
+        // `?preview=1`; that is the only case we skip.
+        const isPreview = req.query.preview === '1' || req.query.preview === 'true';
+        if (!isPreview) {
+          const lowerFilename = filename.toLowerCase();
+          const linkedTool = apkToolsStore.find(t =>
+            t.scriptFileName === filename ||
+            (t.scriptFileName && String(t.scriptFileName).toLowerCase() === lowerFilename) ||
+            t.downloadUrl === `/api/download/${filename}`
+          );
           if (linkedTool) {
             downloadsDelta[linkedTool.id] = (downloadsDelta[linkedTool.id] || 0) + 1;
             linkedTool.downloadCount = (linkedTool.downloadCount || 0) + 1;

@@ -33,7 +33,12 @@ export const ToolDetailModal: React.FC<ToolDetailModalProps> = ({
         ? tool.downloadUrl
         : (tool.scriptFileName ? `/api/download/${tool.scriptFileName}` : `/api/download/${tool.id}.user.js`);
 
-      fetch(targetScriptUrl)
+      // The preview must NOT count as an install — mark it explicitly so the server can skip it.
+      // (The server no longer filters on Sec-Fetch-Dest, because Tampermonkey's own install
+      //  fetch sends "empty" and was being dropped, which broke the download stats.)
+      const previewUrl = `${targetScriptUrl}${targetScriptUrl.includes('?') ? '&' : '?'}preview=1`;
+
+      fetch(previewUrl)
         .then((r) => (r.ok ? r.text() : ''))
         .then((code) => {
           setScriptCode(code);
