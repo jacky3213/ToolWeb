@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Download, QrCode, Shield, Check, Copy, ExternalLink, Calendar, HardDrive, Star, Terminal, Smartphone, Code2, Eye, EyeOff, ListChecks, Wrench } from 'lucide-react';
+import { X, Download, QrCode, Shield, Check, Copy, ExternalLink, Calendar, HardDrive, Star, Terminal, Smartphone, Code2, Eye, EyeOff, ListChecks, Wrench, Puzzle } from 'lucide-react';
 import { ApkTool } from '../types';
 
 interface ToolDetailModalProps {
@@ -75,6 +75,11 @@ export const ToolDetailModal: React.FC<ToolDetailModalProps> = ({
   const directScriptUrl = tool.downloadUrl.endsWith('.user.js')
     ? tool.downloadUrl
     : (tool.scriptFileName ? `/api/download/${tool.scriptFileName}` : `/api/download/${tool.id}.user.js`);
+
+  // Tools that ship BOTH a userscript and a Chrome extension (e.g. Twitch Error 3000 recovery).
+  // Both builds are generated from one shared core, so they behave identically — pick either.
+  const hasChromeExtension = !!tool.extensionZipName;
+  const extensionZipUrl = hasChromeExtension ? `/api/download/${tool.extensionZipName}` : '';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
@@ -251,6 +256,24 @@ export const ToolDetailModal: React.FC<ToolDetailModalProps> = ({
                 <Download className="h-4 w-4" />
                 <span>{isTampermonkey ? '立即安裝腳本 (.user.js)' : `下載 APK 套件 (${tool.fileSize})`}</span>
               </button>
+
+              {/* Alternative install path: Chrome extension (.zip), same behaviour as the script */}
+              {hasChromeExtension && (
+                <a
+                  href={extensionZipUrl}
+                  download
+                  className="w-full py-2.5 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-400/30 text-purple-300 font-mono text-xs uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-2"
+                >
+                  <Puzzle className="h-4 w-4" />
+                  <span>改用 Chrome 擴充套件 (.zip)</span>
+                </a>
+              )}
+
+              {hasChromeExtension && (
+                <p className="text-[10px] font-mono text-slate-500 leading-relaxed px-1">
+                  兩種安裝方式功能完全相同（同一份核心程式碼產生），任選其一即可，勿同時安裝以免重複觸發。
+                </p>
+              )}
 
               {isTampermonkey && scriptCode && (
                 <button

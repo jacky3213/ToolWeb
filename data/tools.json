@@ -160,5 +160,62 @@
     "isFeatured": false,
     "baseDownloadCount": 0,
     "downloadCount": 0
+  },
+  {
+    "id": "twitch-recovery",
+    "name": "Twitch 錯誤 3000 自動修復",
+    "packageName": "https://github.com/jacky3213",
+    "version": "v1.2.0",
+    "versionCode": 120,
+    "minSdk": "Tampermonkey 或 Chrome 擴充套件 (Chrome/Edge/Firefox)",
+    "architecture": "universal",
+    "fileSize": "13.4 KB",
+    "icon": "Terminal",
+    "category": "Tampermonkey",
+    "summary": "Twitch 直播與 VOD 出現錯誤 3000（解碼失敗）時自動重新載入，並還原原本的播放進度與全螢幕狀態。同一份核心程式碼，同時提供 Tampermonkey 腳本與 Chrome 擴充套件兩種安裝方式。",
+    "description": "Twitch 偶爾會跳出「錯誤 3000：解碼失敗」讓影片完全無法播放，只能手動重新整理，且重新整理後播放位置會被歸零。本工具在偵測到錯誤 3000 時自動重新載入頁面，並在載入後還原原本的播放進度與全螢幕狀態，全程無須手動操作。偵測採用 MutationObserver 事件驅動（非輪詢），並具備 15 秒冷卻、每 5 分鐘最多 5 次恢復的防死循環保護；進入全螢幕後 3 秒內抑制偵測，避免按 F 觸發誤判。核心邏輯抽出為單一共用檔，Tampermonkey 腳本與 Chrome 擴充套件由同一份程式碼建置產生，兩者行為完全一致。",
+    "changelog": [
+      "v1.2.0 新增 Tampermonkey 腳本版——與 Chrome 擴充套件共用同一份核心程式碼（src/core.js），build.js 一次產出兩種單檔",
+      "v1.2.0 修正 SPA 情境：Twitch 切換頻道不會 reload，舊版可能把上一部影片的進度套用到新影片；現在比對正規化網址後才還原",
+      "v1.2.0 修正可見性判定——舊版 `offsetParent === null && !checkVisibility` 條件在支援 checkVisibility 的瀏覽器上恆為 false，等同沒做過濾",
+      "v1.2.0 修正 video.play() 被瀏覽器自動播放政策拒絕時產生未捕捉的 Promise 例外",
+      "v1.1 進入全螢幕後 3 秒內抑制錯誤偵測，修復按 F 進入全螢幕時被誤判為錯誤 3000",
+      "v1.1 重新載入後自動恢復全螢幕狀態",
+      "v1.0 偵測錯誤 3000 並自動重新載入，還原 VOD 播放位置",
+      "MutationObserver 事件驅動偵測，零輪詢開銷"
+    ],
+    "downloadUrl": "/api/download/twitch-recovery.user.js",
+    "scriptFileName": "twitch-recovery.user.js",
+    "extensionZipName": "twitch-recovery-extension.zip",
+    "rating": 5,
+    "releaseDate": "2026-10-19",
+    "checksumSha256": "b87be912cc89ffa392a0a901e6271c96ad7c31e0c854187f8abd482e8932e324",
+    "screenshots": [],
+    "installGuide": {
+      "steps": [
+        "選擇任一安裝方式即可（兩者功能完全相同，勿同時安裝）：",
+        "【方式一・Tampermonkey】安裝 Tampermonkey 擴充功能 → 點擊上方「立即安裝腳本 (.user.js)」→ 在 Tampermonkey 安裝頁按「安裝」",
+        "【方式二・Chrome 擴充套件】點擊「改用 Chrome 擴充套件 (.zip)」下載 → 將壓縮檔解壓縮成一個資料夾",
+        "開啟 chrome://extensions（Edge 為 edge://extensions）→ 開啟右上角「開發人員模式」",
+        "點擊「載入未封裝項目」→ 選取剛才解壓縮的資料夾（要選到含有 manifest.json 的那一層）",
+        "打開 Twitch 任意直播或 VOD 頁面並開始播放，出錯時會自動重新載入並回到原播放位置"
+      ],
+      "verify": "開啟 Twitch 頁面後按 F12 → Console 面板，應看到 [Twitch Recovery] 的日誌輸出。播放中每 3 秒會記錄一次進度；發生錯誤 3000 時會出現「Error 3000 detected, reloading (#N)...」。",
+      "troubleshooting": {
+        "title": "安裝後沒有反應，或回到頁面後位置沒有還原？",
+        "steps": [
+          "確認腳本已啟用：Tampermonkey 圖示 →  Manage Dashboard → 找到 Twitch Recovery → 確認開關為綠色",
+          "Tampermonkey 版需開啟「允許使用者指令碼」：chrome://extensions → Tampermonkey → 詳細資料 → 開啟「允許使用者指令碼」",
+          "確認網址是 twitch.tv 網域（含直播頁與 /videos/ VOD 頁），其他網域不會執行",
+          "檢查 Console 是否出現「Too many recoveries, reload loop prevented」——代表 5 分鐘內已恢復 5 次，請檢查網路或換個直播間測試",
+          "若位置沒有還原，多半是 Twitch 在錯誤發生時已把 video 元素銷毀，此時會沿用最後一次心跳記錄的位置（最多誤差 3 秒）"
+        ],
+        "note": "說明：本工具只在偵測到 Twitch 官方錯誤 3000 畫面時才動作，直播與 VOD 都能用。它不會修改 Twitch 的請求或播放行為，僅在出錯時重新載入頁面，因此不會影響帳號安全或觸發反作弊。若同時安裝了兩種版本，兩者會各自觸發一次重新載入，請只保留一種。"
+      }
+    },
+    "isOfficial": true,
+    "isFeatured": false,
+    "baseDownloadCount": 0,
+    "downloadCount": 0
   }
 ]

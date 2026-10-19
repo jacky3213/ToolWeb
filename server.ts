@@ -870,6 +870,18 @@ async function startServer() {
       }
     }
 
+    // Remove the linked Chrome extension archive too (e.g. twitch-recovery-extension.zip)
+    if (targetTool && targetTool.extensionZipName) {
+      const zipPath = path.join(UPLOADS_DIR, targetTool.extensionZipName);
+      if (fs.existsSync(zipPath)) {
+        try {
+          fs.unlinkSync(zipPath);
+        } catch (e) {
+          console.error("Error deleting extension zip:", e);
+        }
+      }
+    }
+
     apkToolsStore = apkToolsStore.filter(t => t.id !== id);
     saveTools();
     res.json({ success: true, tools: apkToolsStore });
@@ -1026,7 +1038,39 @@ async function startServer() {
   app.get("/api/download/:filename", async (req, res) => {
     const filename = req.params.filename;
     const isUserScript = filename.endsWith('.user.js') || filename.endsWith('.js');
+    const isZip = filename.endsWith('.zip');
     const localFilePath = path.join(UPLOADS_DIR, filename);
+
+    // Chrome extension bundle (e.g. twitch-recovery-extension.zip).
+    // Served as an attachment so the browser downloads it instead of navigating,
+    // and counted only when it is NOT the in-site preview.
+    if (isZip) {
+      const isPreview = req.query.preview === '1' || req.query.preview === 'true';
+      if (!isPreview) {
+        const linkedTool = apkToolsStore.find(t =>
+          t.extensionZipName === filename ||
+          t.downloadUrl === `/api/download/${filename}`
+        );
+        if (linkedTool) {
+          downloadsDelta[linkedTool.id] = (downloadsDelta[linkedTool.id] || 0) + 1;
+          linkedTool.downloadCount = (linkedTool.downloadCount || 0) + 1;
+          saveTools();
+          saveDeltas();
+          recordDownloadToGoogleForm(linkedTool.id, linkedTool.version || 'v1.0').catch(console.error);
+        }
+      }
+
+      if (fs.existsSync(localFilePath)) {
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${encodeURIComponent(filename)}"`
+        );
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        return res.sendFile(localFilePath);
+      }
+      return res.status(404).send("Extension archive not found on server.");
+    }
 
     if (isUserScript) {
       // Standard userscript headers (No Content-Disposition to allow Tampermonkey extension intercept)

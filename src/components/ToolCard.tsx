@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Download, QrCode, Star, Sparkles, Smartphone, Cpu, Activity, Terminal, Trash2, Code2, Globe } from 'lucide-react';
+import { Download, QrCode, Star, Sparkles, Smartphone, Cpu, Activity, Terminal, Trash2, Code2, Globe, Puzzle } from 'lucide-react';
 import { ApkTool } from '../types';
 
 interface ToolCardProps {
@@ -84,6 +84,14 @@ export const ToolCard: React.FC<ToolCardProps> = ({ tool, onSelect, onDownload, 
           <span className={`px-1.5 py-0.5 rounded border ${isTampermonkey ? 'bg-amber-500/10 border-amber-400/30 text-amber-300 font-bold' : 'bg-white/5 border-white/10 text-slate-300'}`}>
             {isTampermonkey ? '🐵 Tampermonkey' : tool.category}
           </span>
+          {tool.extensionZipName && (
+            <span
+              className="px-1.5 py-0.5 rounded border bg-purple-500/10 border-purple-400/30 text-purple-300 font-bold"
+              title="同時提供 Chrome 擴充套件版本"
+            >
+              🧩 Chrome
+            </span>
+          )}
           {tool.architecture && !isTampermonkey && (
             <span className="bg-white/5 border border-white/5 text-slate-400 px-1.5 py-0.5 rounded">
               {tool.architecture}

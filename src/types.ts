@@ -32,6 +32,11 @@ export interface ApkTool {
   baseDownloadCount?: number;
   apkFileName?: string;
   scriptFileName?: string;
+  /**
+   * Optional Chrome extension archive (.zip) offered as an alternative install path
+   * next to the Tampermonkey script. Served from /api/download/<extensionZipName>.
+   */
+  extensionZipName?: string;
   rating: number;
   releaseDate: string;
   checksumSha256: string;
