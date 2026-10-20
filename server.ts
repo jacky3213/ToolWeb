@@ -27,18 +27,12 @@ if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
 
-const DATA_DIR = path.join(process.cwd(), 'data');
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
 // Canonical raw source for Tampermonkey userscripts.
 // GitHub Raw is public, stable, and cookie-free — the ONLY reliable target for
 // Tampermonkey @updateURL/@downloadURL. (AI Studio / preview domains serve an
 // auth cookie wall to Tampermonkey, breaking update checks silently.)
 const GITHUB_RAW_BASE = process.env.GITHUB_RAW_BASE || 'https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks';
 
-const ADMIN_FILE = path.join(DATA_DIR, 'admin.json');
 
 
 // 工具清單的唯一事實來源：repo 根目錄的 tools.json（manifest）+ public/apks/ 目錄列舉。
@@ -325,38 +319,6 @@ async function refreshScriptsFromGitHub(): Promise<{ updated: string[] }> {
 // Refresh userscripts from GitHub Raw on boot (after store is loaded)
 refreshScriptsFromGitHub().catch(console.error);
 
-// Admin Passcode Config
-// 安全性：程式碼內「絕對不帶」預設密碼（曾經寫死在 repo 裡，已移除）。
-// 優先順序：環境變數 ADMIN_PASSCODE > 本機 admin.json > 隨機一次性密碼。
-// 部署環境請用 AI Studio 的 Secrets 面板設定 ADMIN_PASSCODE（runtime 注入、不進任何 repo）。
-let adminPasscode = process.env.ADMIN_PASSCODE || "";
-let isPasscodeRequired = true; // Protect uploading by default
-
-// 只有當「未設定環境變數」時，才從本機 admin.json 讀取
-if (!adminPasscode && fs.existsSync(ADMIN_FILE)) {
-  try {
-    const adminData = JSON.parse(fs.readFileSync(ADMIN_FILE, 'utf-8'));
-    if (adminData.adminPasscode) adminPasscode = adminData.adminPasscode;
-    if (typeof adminData.isPasscodeRequired === 'boolean') isPasscodeRequired = adminData.isPasscodeRequired;
-  } catch (e) {
-    console.error("Failed to load admin.json:", e);
-  }
-}
-
-if (!adminPasscode) {
-  adminPasscode = crypto.randomBytes(9).toString("base64url");
-  console.warn(`\n[SECURITY] 未設定 ADMIN_PASSCODE，已產生隨機一次性管理員密碼：${adminPasscode}`);
-  console.warn("[SECURITY] 此密碼重啟即失效，請在環境變數設定 ADMIN_PASSCODE 以固定。\n");
-}
-
-function saveAdminSettings() {
-  try {
-    fs.writeFileSync(ADMIN_FILE, JSON.stringify({ adminPasscode, isPasscodeRequired }, null, 2), 'utf-8');
-  } catch (e) {
-    console.error("Failed to write admin.json:", e);
-  }
-}
-
 // Helper to inject canonical @updateURL and @downloadURL pointing at GitHub Raw.
 // NEVER use the ephemeral request host (AI Studio preview / localhost) — those URLs
 // are either temporary or behind an auth cookie wall, so Tampermonkey update checks
@@ -417,146 +379,6 @@ async function startServer() {
     res.json(clean);
   });
 
-
-  // API 2: Verify Admin Passcode / Status
-  app.get("/api/admin/status", (req, res) => {
-    res.json({
-      passcodeRequired: isPasscodeRequired,
-      // 是否為使用者自訂（有設定環境變數或已存過 admin.json），而非每次開機隨機產生的
-      hasCustomPasscode: !!process.env.ADMIN_PASSCODE || fs.existsSync(ADMIN_FILE)
-    });
-  });
-
-  app.post("/api/admin/verify", (req, res) => {
-    const { passcode } = req.body;
-    if (!isPasscodeRequired || passcode === adminPasscode) {
-      return res.json({ success: true, message: "管理員身分驗證成功" });
-    }
-    return res.status(401).json({ success: false, error: "管理員密碼錯誤！" });
-  });
-
-  app.post("/api/admin/set-passcode", (req, res) => {
-    const { currentPasscode, newPasscode, toggleProtection } = req.body;
-    
-    if (isPasscodeRequired && currentPasscode !== adminPasscode) {
-      return res.status(401).json({ error: "原管理員密碼不正確" });
-    }
-
-    if (typeof toggleProtection === 'boolean') {
-      isPasscodeRequired = toggleProtection;
-    }
-
-    if (newPasscode && newPasscode.trim().length >= 4) {
-      adminPasscode = newPasscode.trim();
-    }
-
-    saveAdminSettings();
-
-    res.json({
-      success: true,
-      passcodeRequired: isPasscodeRequired,
-      message: "管理員安全設定已更新"
-    });
-  });
-
-  // API 3: Add or update tool (Protected by Admin Passcode)
-  app.post("/api/tools", (req, res) => {
-    const { tool, passcode } = req.body;
-    const toolData = tool || req.body;
-
-    if (isPasscodeRequired && passcode !== adminPasscode) {
-      return res.status(401).json({ error: "需要管理員密碼才能上架發布 APK！" });
-    }
-
-    if (!toolData.name || !toolData.id) {
-      return res.status(400).json({ error: "請填寫工具名稱與 ID" });
-    }
-
-    const existingIndex = apkToolsStore.findIndex(t => t.id === toolData.id);
-    if (existingIndex >= 0) {
-      apkToolsStore[existingIndex] = { ...apkToolsStore[existingIndex], ...toolData };
-    } else {
-      apkToolsStore.unshift({
-        downloadCount: 1,
-        rating: 5.0,
-        releaseDate: new Date().toISOString().split('T')[0],
-        changelog: ['初始版本上架發布'],
-        screenshots: [],
-        checksumSha256: Math.random().toString(36).substring(2) + Math.random().toString(36).substring(2),
-        ...toolData
-      });
-    }
-
-    saveTools();
-
-    res.json({ success: true, tools: apkToolsStore });
-  });
-
-  // API 4: Increment download count (Public)
-  app.post("/api/tools/:id/download-count", (req, res) => {
-    const { id } = req.params;
-    const tool = apkToolsStore.find(t => t.id === id);
-    if (tool) {
-      tool.downloadCount = (tool.downloadCount || 0) + 1;
-      saveTools();
-
-      // Automatically record to Google Form in background
-      recordDownloadToGoogleForm(id, tool.version || 'v1.0').catch(console.error);
-
-      return res.json({ success: true, count: tool.downloadCount });
-    }
-    res.status(404).json({ error: "找不到該工具" });
-  });
-
-  // API 5: Delete tool (Protected)
-  app.delete("/api/tools/:id", (req, res) => {
-    const { id } = req.params;
-    const passcode = req.headers['x-admin-passcode'] || req.query.passcode;
-
-    if (isPasscodeRequired && passcode !== adminPasscode) {
-      return res.status(401).json({ error: "需要管理員密碼才能刪除套件" });
-    }
-
-    const targetTool = apkToolsStore.find(t => t.id === id);
-    if (targetTool && targetTool.downloadUrl && targetTool.downloadUrl.startsWith('/api/download/')) {
-      const filename = targetTool.downloadUrl.replace('/api/download/', '');
-      const filePath = path.join(UPLOADS_DIR, filename);
-      if (fs.existsSync(filePath)) {
-        try {
-          fs.unlinkSync(filePath);
-        } catch (e) {
-          console.error("Error deleting apk file:", e);
-        }
-      }
-    }
-
-    // Remove the linked Chrome extension archive too (e.g. twitch-recovery-extension.zip)
-    if (targetTool && targetTool.extensionZipName) {
-      const zipPath = path.join(UPLOADS_DIR, targetTool.extensionZipName);
-      if (fs.existsSync(zipPath)) {
-        try {
-          fs.unlinkSync(zipPath);
-        } catch (e) {
-          console.error("Error deleting extension zip:", e);
-        }
-      }
-    }
-
-    apkToolsStore = apkToolsStore.filter(t => t.id !== id);
-    saveTools();
-    res.json({ success: true, tools: apkToolsStore });
-  });
-
-  // API 6: Clear all tools (Protected)
-  app.post("/api/tools/clear", (req, res) => {
-    const { passcode } = req.body;
-    if (isPasscodeRequired && passcode !== adminPasscode) {
-      return res.status(401).json({ error: "需要管理員密碼才能清空列表" });
-    }
-    apkToolsStore = [];
-    saveTools();
-    res.json({ success: true, tools: [] });
-  });
 
   // API 7: Central Server Direct Download Handler (Serves cached APK directly from server)
   app.get("/api/tools/:id/download", async (req, res) => {
@@ -789,55 +611,6 @@ async function startServer() {
     );
 
     res.send(dummyApkHeader);
-  });
-
-  // API 8: Upload APK or UserScript file via Base64 or metadata receiver (Protected)
-  app.post("/api/upload-apk", (req, res) => {
-    try {
-      const { fileName, base64Data, textContent, externalUrl, passcode } = req.body;
-
-      if (isPasscodeRequired && passcode !== adminPasscode) {
-        return res.status(401).json({ error: "權限不符：需要管理員密碼才能上傳檔案" });
-      }
-
-      if (externalUrl) {
-        return res.json({ success: true, downloadUrl: externalUrl });
-      }
-
-      if (textContent && fileName) {
-        const cleanName = fileName.replace(/[^a-zA-Z0-9_.-]/g, '');
-        const targetPath = path.join(UPLOADS_DIR, cleanName);
-        fs.writeFileSync(targetPath, textContent, 'utf-8');
-        const sizeKb = (Buffer.byteLength(textContent, 'utf-8') / 1024).toFixed(1);
-        return res.json({
-          success: true,
-          downloadUrl: `/api/download/${cleanName}`,
-          fileSize: `${sizeKb} KB`
-        });
-      }
-
-      if (base64Data && fileName) {
-        const cleanName = fileName.replace(/[^a-zA-Z0-9_.-]/g, '');
-        const targetPath = path.join(UPLOADS_DIR, cleanName);
-        const buffer = Buffer.from(base64Data, 'base64');
-        fs.writeFileSync(targetPath, buffer);
-        
-        const sizeFormatted = buffer.length > 1024 * 1024 
-          ? `${(buffer.length / (1024 * 1024)).toFixed(1)} MB`
-          : `${(buffer.length / 1024).toFixed(1)} KB`;
-
-        return res.json({ 
-          success: true, 
-          downloadUrl: `/api/download/${cleanName}`,
-          fileSize: sizeFormatted
-        });
-      }
-
-      return res.status(400).json({ error: "未提供檔案資料或 URL" });
-    } catch (err: any) {
-      console.error("Upload error:", err);
-      res.status(500).json({ error: err.message || "上傳檔案失敗" });
-    }
   });
 
   // API 9: Gemini Chat for Release Notes & Descriptions
