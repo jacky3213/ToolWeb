@@ -45,6 +45,11 @@ export function App() {
   // 此布林僅用於 UI 提示與避免 token 失效時的短暫閃爍。
   const isUnlocked = Boolean(unlockToken);
 
+  // ⚠️ 不可用 hasLockedTools 當入口顯示條件：後端在未解鎖時不會回傳 locked 工具
+  // （server.ts:408），tools.some(t => t.locked) 恆為 false，入口永遠不會出現，
+  // 密碼框也就永遠打不開。未解鎖時一律顯示入口；已解鎖時才需要「重新鎖定」。
+  const showLockBar = !isUnlocked || hasLockedTools;
+
   const handleUnlock = async () => {
     if (!unlockInput.trim()) return;
     setIsUnlocking(true);
@@ -238,7 +243,7 @@ export function App() {
       {/* Main Content Area */}
       <main className="flex-1 mx-auto max-w-7xl w-full px-3 sm:px-8 py-6 sm:py-8">
         {/* Restricted tools unlock bar */}
-        {hasLockedTools && (
+        {showLockBar && (
           <div className="mb-5 flex items-center justify-between gap-3 rounded-2xl border border-amber-400/20 bg-amber-500/5 px-4 py-3">
             <div className="flex items-center gap-2.5 min-w-0">
               <Lock className="h-4 w-4 text-amber-400 shrink-0" />
@@ -344,6 +349,16 @@ export function App() {
               <code className="text-cyan-300"> public/apks/</code> 並在
               <code className="text-cyan-300"> tools.json</code> 登錄後，工具會在約一分鐘內自動出現。
             </p>
+
+            {/* 全部工具都被鎖住時，列表會是空的——這裡必須留一個解鎖入口，否則沒有出路 */}
+            {!isUnlocked && (
+              <button
+                onClick={() => setIsUnlockOpen(true)}
+                className="mt-5 rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-2 text-xs font-mono text-amber-200 hover:bg-amber-400/20 active:scale-95 transition-all"
+              >
+                輸入管理密碼解鎖受限工具
+              </button>
+            )}
             </div>
           )}
         </div>
