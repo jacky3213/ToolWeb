@@ -1,12 +1,3 @@
-export function splitRanges(totalSize, chunkSize) {
-  if (!Number.isFinite(totalSize) || totalSize <= 0 || !Number.isFinite(chunkSize) || chunkSize <= 0) return [];
-  const ranges = [];
-  for (let start = 0; start < totalSize; start += chunkSize) {
-    ranges.push({ start, end: Math.min(start + chunkSize, totalSize) - 1 });
-  }
-  return ranges;
-}
-
 export function formatBytes(bytes) {
   if (!Number.isFinite(bytes) || bytes < 0) return '?';
   if (bytes < 1024) return `${bytes} B`;
