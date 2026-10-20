@@ -1,16 +1,14 @@
 import React, { useState } from 'react';
-import { Download, QrCode, Star, Sparkles, Smartphone, Cpu, Activity, Terminal, Trash2, Code2, Globe, Puzzle } from 'lucide-react';
+import { Download, QrCode, Star, Sparkles, Smartphone, Cpu, Activity, Terminal, Code2, Globe, Puzzle } from 'lucide-react';
 import { ApkTool } from '../types';
 
 interface ToolCardProps {
   tool: ApkTool;
   onSelect: (tool: ApkTool) => void;
   onDownload: (tool: ApkTool) => void;
-  onDelete?: (toolId: string) => void;
-  isUnlocked?: boolean;
 }
 
-export const ToolCard: React.FC<ToolCardProps> = ({ tool, onSelect, onDownload, onDelete, isUnlocked }) => {
+export const ToolCard: React.FC<ToolCardProps> = ({ tool, onSelect, onDownload }) => {
   const [qrOpen, setQrOpen] = useState(false);
   const isTampermonkey = tool.category === 'Tampermonkey' || tool.downloadUrl.includes('.user.js');
 
@@ -58,17 +56,8 @@ export const ToolCard: React.FC<ToolCardProps> = ({ tool, onSelect, onDownload, 
             </div>
           </div>
 
-          {/* Rating Badge or Delete Button */}
+          {/* Rating Badge */}
           <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
-            {isUnlocked && onDelete && (
-              <button
-                onClick={() => onDelete(tool.id)}
-                className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 transition-all"
-                title="刪除此項目"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            )}
             <div className="flex items-center gap-1 bg-white/5 border border-white/10 px-1.5 py-0.5 sm:px-2 rounded-md text-[10px] font-mono text-amber-400">
               <Star className="h-3 w-3 fill-amber-400 shrink-0" />
               <span>{tool.rating.toFixed(1)}</span>

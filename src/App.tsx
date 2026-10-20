@@ -1,24 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Smartphone, Plus, ShieldCheck, Sparkles, ArrowUpDown, Lock, CheckCircle2, FileCheck2, Trash2, Code2 } from 'lucide-react';
+import { Search, Sparkles, ArrowUpDown, Code2 } from 'lucide-react';
 import { ApkTool, ToolCategory } from './types';
 import { Header } from './components/Header';
 import { ToolCard } from './components/ToolCard';
 import { ToolDetailModal } from './components/ToolDetailModal';
-import { AddToolModal } from './components/AddToolModal';
 import { InstallGuideModal } from './components/InstallGuideModal';
-import { AdminPasscodeModal } from './components/AdminPasscodeModal';
 import { VersionBadge } from './components/VersionBadge';
 
 export function App() {
   const [tools, setTools] = useState<ApkTool[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // Admin Security state
-  // 安全性：程式碼內不得存放預設密碼，一律由使用者輸入（後端讀取 ADMIN_PASSCODE）
-  const [adminPasscode, setAdminPasscode] = useState('');
-  const [isProtectionEnabled, setIsProtectionEnabled] = useState(true);
-  const [isUnlocked, setIsUnlocked] = useState(false);
-  const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
 
   // Search & Filter State
   const [searchQuery, setSearchQuery] = useState('');
@@ -28,16 +20,14 @@ export function App() {
   // Modals state
   const [selectedTool, setSelectedTool] = useState<ApkTool | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
-  const [isAddOpen, setIsAddOpen] = useState(false);
   const [isInstallGuideOpen, setIsInstallGuideOpen] = useState(false);
 
   // Notification Toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Fetch tools & admin status on mount
+  // Fetch tools on mount
   useEffect(() => {
     fetchTools();
-    checkAdminStatus();
   }, []);
 
   const fetchTools = async () => {
@@ -53,18 +43,6 @@ export function App() {
       setTools([]);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const checkAdminStatus = async () => {
-    try {
-      const res = await fetch('/api/admin/status');
-      if (res.ok) {
-        const data = await res.json();
-        setIsProtectionEnabled(data.passcodeRequired);
-      }
-    } catch (e) {
-      console.error(e);
     }
   };
 
@@ -107,61 +85,6 @@ export function App() {
     }
   };
 
-  // Handle Save New Tool
-  const handleSaveTool = async (newToolData: Partial<ApkTool>, passcode?: string) => {
-    try {
-      const res = await fetch('/api/tools', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tool: newToolData,
-          passcode: passcode || adminPasscode,
-        }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data.tools) {
-          setTools(data.tools);
-        } else {
-          fetchTools();
-        }
-        showToast(`✅ 成功上架發布 ${newToolData.name}！`);
-      } else {
-        const err = await res.json();
-        showToast(`❌ 發布失敗: ${err.error || '需要管理員授權'}`);
-        setIsAdminModalOpen(true);
-      }
-    } catch (err) {
-      console.error(err);
-      showToast('❌ 發布時發生伺服器錯誤');
-    }
-  };
-
-  // Handle Delete Tool
-  const handleDeleteTool = async (toolId: string) => {
-    if (!confirm('確定要刪除這款 APK 套件嗎？')) return;
-
-    try {
-      const res = await fetch(`/api/tools/${toolId}`, {
-        method: 'DELETE',
-        headers: {
-          'x-admin-passcode': adminPasscode,
-        },
-      });
-
-      if (res.ok) {
-        setTools((prev) => prev.filter((t) => t.id !== toolId));
-        showToast('🗑️ 已成功移除該 APK 套件');
-      } else {
-        showToast('❌ 刪除失敗，權限不足');
-        setIsAdminModalOpen(true);
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
   // Filter & Sort Logic
   const categories: ToolCategory[] = ['All', 'Tampermonkey', 'Utility', 'Developer', 'AI & Tools', 'Network', 'Media'];
 
@@ -199,10 +122,7 @@ export function App() {
       <Header
         toolCount={tools.length}
         totalDownloads={totalDownloads}
-        onOpenAddModal={() => setIsAddOpen(true)}
         onOpenInstallGuide={() => setIsInstallGuideOpen(true)}
-        onOpenAdminModal={() => setIsAdminModalOpen(true)}
-        isUnlocked={isUnlocked}
       />
 
       {/* Hero Section */}
@@ -307,8 +227,6 @@ export function App() {
                         setIsDetailOpen(true);
                       }}
                       onDownload={handleDownload}
-                      onDelete={handleDeleteTool}
-                      isUnlocked={isUnlocked}
                     />
                   ))}
                 </div>
@@ -328,27 +246,13 @@ export function App() {
               </div>
 
               <h2 className="text-xl font-bold text-white mb-2 font-sans">
-                歡迎發布您的 Android APK 或 Tampermonkey 腳本
-              </h2>
-              <p className="text-xs text-slate-300 font-light leading-relaxed max-w-md mx-auto mb-6">
-                您可以點擊下方按鈕上傳 APK 或貼上 Tampermonkey (.user.js / 雲端) 連結，開始建立您的專屬工具庫。
-              </p>
-
-              <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-                <button
-                  onClick={() => setIsAddOpen(true)}
-                  className="px-6 py-3 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-mono text-xs font-bold uppercase tracking-wider transition-all shadow-[0_0_20px_rgba(34,211,238,0.25)] flex items-center gap-2 active:scale-95"
-                >
-                  <Plus className="h-4 w-4" /> 上架發布工具或腳本
-                </button>
-
-                <button
-                  onClick={() => setIsAdminModalOpen(true)}
-                  className="px-5 py-3 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 font-mono text-xs border border-white/10 flex items-center gap-2"
-                >
-                  <Lock className="h-4 w-4 text-cyan-400" /> 管理員安全設定
-                </button>
-              </div>
+              工具庫目前是空的
+            </h2>
+            <p className="text-xs text-slate-300 font-light leading-relaxed max-w-md mx-auto">
+              尚未發布任何工具。若你是網站維護者，將 APK 或 <code className="text-cyan-300">.user.js</code> 放入
+              <code className="text-cyan-300"> public/apks/</code> 並在
+              <code className="text-cyan-300"> tools.json</code> 登錄後，工具會在約一分鐘內自動出現。
+            </p>
             </div>
           )}
         </div>
@@ -377,33 +281,6 @@ export function App() {
           setSelectedTool(null);
         }}
         onDownload={handleDownload}
-      />
-
-      <AddToolModal
-        isOpen={isAddOpen}
-        onClose={() => setIsAddOpen(false)}
-        onSave={handleSaveTool}
-        adminPasscode={adminPasscode}
-        isUnlocked={isUnlocked}
-        onOpenAdminAuth={() => setIsAdminModalOpen(true)}
-      />
-
-      <AdminPasscodeModal
-        isOpen={isAdminModalOpen}
-        onClose={() => setIsAdminModalOpen(false)}
-        adminPasscode={adminPasscode}
-        onSavePasscode={(newCode, isRequired) => {
-          setAdminPasscode(newCode);
-          setIsProtectionEnabled(isRequired);
-          fetch('/api/admin/set-passcode', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ currentPasscode: adminPasscode, newPasscode: newCode, toggleProtection: isRequired }),
-          });
-        }}
-        isProtectionEnabled={isProtectionEnabled}
-        onVerifySuccess={(passcode) => { setAdminPasscode(passcode); setIsUnlocked(true); }}
-        isUnlocked={isUnlocked}
       />
 
       <InstallGuideModal
