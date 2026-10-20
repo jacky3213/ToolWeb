@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Sparkles, ArrowUpDown, Code2 } from 'lucide-react';
+import { Search, Sparkles, ArrowUpDown, Code2, Lock, X } from 'lucide-react';
 import { ApkTool, ToolCategory } from './types';
+import { UNLOCK_TOKEN_KEY, UNLOCK_API_PATH } from './config';
 import { Header } from './components/Header';
 import { ToolCard } from './components/ToolCard';
 import { ToolDetailModal } from './components/ToolDetailModal';
@@ -25,15 +26,78 @@ export function App() {
   // Notification Toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Fetch tools on mount
+  // Admin unlock state (restricted/locked tools)
+  const [unlockToken, setUnlockToken] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(UNLOCK_TOKEN_KEY);
+    } catch {
+      return null;
+    }
+  });
+  const [isUnlockOpen, setIsUnlockOpen] = useState(false);
+  const [unlockInput, setUnlockInput] = useState('');
+  const [unlockError, setUnlockError] = useState<string | null>(null);
+  const [isUnlocking, setIsUnlocking] = useState(false);
+
+  const hasLockedTools = tools.some((t) => t.locked);
+
+  // 前端「已解鎖」＝持有 token。真正權威過濾在後端（/api/tools 依 token 返回），
+  // 此布林僅用於 UI 提示與避免 token 失效時的短暫閃爍。
+  const isUnlocked = Boolean(unlockToken);
+
+  const handleUnlock = async () => {
+    if (!unlockInput.trim()) return;
+    setIsUnlocking(true);
+    setUnlockError(null);
+    try {
+      const res = await fetch(UNLOCK_API_PATH, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passcode: unlockInput }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.token) {
+        setUnlockToken(data.token);
+        setUnlockInput('');
+        setIsUnlockOpen(false);
+        try {
+          localStorage.setItem(UNLOCK_TOKEN_KEY, data.token);
+        } catch {
+          /* ignore */
+        }
+        showToast('🔓 已解鎖受限工具');
+      } else {
+        setUnlockError(data.error || '密碼錯誤，請重試');
+      }
+    } catch {
+      setUnlockError('連線失敗，請稍後重試');
+    } finally {
+      setIsUnlocking(false);
+    }
+  };
+
+  const handleLock = () => {
+    setUnlockToken(null);
+    try {
+      localStorage.removeItem(UNLOCK_TOKEN_KEY);
+    } catch {
+      /* ignore */
+    }
+    showToast('🔒 已重新鎖定受限工具');
+  };
+
+  // Fetch tools on mount and whenever the unlock token changes
   useEffect(() => {
     fetchTools();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unlockToken]);
 
   const fetchTools = async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/tools');
+      // 帶上解鎖 token（若有），讓後端放行 locked 工具。
+      const url = unlockToken ? `/api/tools?token=${encodeURIComponent(unlockToken)}` : '/api/tools';
+      const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
         setTools(Array.isArray(data) ? data : []);
@@ -90,6 +154,9 @@ export function App() {
 
   const filteredTools = tools
     .filter((tool) => {
+      // Hide locked tools until the admin passcode unlocks them
+      if (tool.locked && !isUnlocked) return false;
+
       const matchesSearch =
         tool.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         tool.packageName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -106,7 +173,9 @@ export function App() {
       return 0;
     });
 
-  const totalDownloads = tools.reduce((acc, t) => acc + t.downloadCount, 0);
+  // Tools visible regardless of search/filter (only lock state applies) — used for header stats
+  const visibleTools = tools.filter((t) => !t.locked || isUnlocked);
+  const visibleTotalDownloads = visibleTools.reduce((acc, t) => acc + t.downloadCount, 0);
 
   return (
     <div className="min-h-screen bg-[#020203] text-slate-100 flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
@@ -120,8 +189,8 @@ export function App() {
 
       {/* Top Header */}
       <Header
-        toolCount={tools.length}
-        totalDownloads={totalDownloads}
+        toolCount={visibleTools.length}
+        totalDownloads={visibleTotalDownloads}
         onOpenInstallGuide={() => setIsInstallGuideOpen(true)}
       />
 
@@ -168,6 +237,28 @@ export function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 mx-auto max-w-7xl w-full px-3 sm:px-8 py-6 sm:py-8">
+        {/* Restricted tools unlock bar */}
+        {hasLockedTools && (
+          <div className="mb-5 flex items-center justify-between gap-3 rounded-2xl border border-amber-400/20 bg-amber-500/5 px-4 py-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <Lock className="h-4 w-4 text-amber-400 shrink-0" />
+              <span className="text-xs font-mono text-amber-200/90 truncate">
+                {isUnlocked ? '受限工具已解鎖' : '部分工具需輸入管理密碼才能顯示'}
+              </span>
+            </div>
+            <button
+              onClick={isUnlocked ? handleLock : () => setIsUnlockOpen(true)}
+              className={`shrink-0 rounded-lg border px-3 py-1.5 text-xs font-mono transition-all active:scale-95 ${
+                isUnlocked
+                  ? 'border-white/10 bg-white/5 text-slate-300 hover:text-white hover:bg-white/10'
+                  : 'border-amber-400/30 bg-amber-400/10 text-amber-200 hover:bg-amber-400/20'
+              }`}
+            >
+              {isUnlocked ? '重新鎖定' : '解鎖'}
+            </button>
+          </div>
+        )}
+
         {tools.length > 0 && (
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-6">
             <div className="flex items-center gap-1.5 overflow-x-auto pb-2 sm:pb-0 no-scrollbar touch-pan-x -mx-3 px-3 sm:mx-0 sm:px-0">
@@ -287,6 +378,74 @@ export function App() {
         isOpen={isInstallGuideOpen}
         onClose={() => setIsInstallGuideOpen(false)}
       />
+
+      {/* Admin unlock modal */}
+      {isUnlockOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            onClick={() => {
+              setIsUnlockOpen(false);
+              setUnlockInput('');
+              setUnlockError(null);
+            }}
+          />
+          <div className="relative w-full max-w-sm rounded-2xl border border-amber-400/20 bg-[#0a0a0c] p-6 shadow-2xl">
+            <button
+              onClick={() => {
+                setIsUnlockOpen(false);
+                setUnlockInput('');
+                setUnlockError(null);
+              }}
+              className="absolute right-4 top-4 text-slate-500 hover:text-white transition-colors"
+              aria-label="關閉"
+            >
+              <X className="h-4 w-4" />
+            </button>
+
+            <div className="flex items-center gap-2.5 mb-2">
+              <Lock className="h-5 w-5 text-amber-400" />
+              <h3 className="text-base font-bold text-white font-sans">解鎖受限工具</h3>
+            </div>
+            <p className="text-xs text-slate-400 font-light mb-4 leading-relaxed">
+              輸入管理密碼以顯示受限工具（如 YouTube 直連下載）。
+            </p>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleUnlock();
+              }}
+            >
+              <input
+                type="password"
+                autoFocus
+                value={unlockInput}
+                onChange={(e) => {
+                  setUnlockInput(e.target.value);
+                  setUnlockError(null);
+                }}
+                placeholder="管理密碼"
+                className={`w-full rounded-xl border bg-white/5 px-3.5 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none transition-colors ${
+                  unlockError
+                    ? 'border-red-500/60 focus:border-red-400'
+                    : 'border-white/10 focus:border-amber-400/50'
+                }`}
+              />
+              {unlockError && (
+                <p className="mt-2 text-xs font-mono text-red-400">{unlockError}</p>
+              )}
+              <button
+                type="submit"
+                disabled={isUnlocking}
+                className="mt-4 w-full rounded-xl bg-amber-400 py-2.5 text-sm font-bold text-slate-950 transition-all hover:bg-amber-300 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isUnlocking ? '驗證中…' : '解鎖'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

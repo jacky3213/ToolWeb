@@ -44,6 +44,11 @@ export interface ApkTool {
   installGuide?: InstallGuide;
   isFeatured?: boolean;
   isOfficial?: boolean;
+  /**
+   * 標記為受限工具：需輸入 admin passcode 解鎖後才會顯示。
+   * 由後端 /api/tools 依 manifest 的 locked 欄位回傳，前端據此過濾。
+   */
+  locked?: boolean;
 }
 
 export interface ChatMessage {

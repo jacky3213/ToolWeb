@@ -10,6 +10,39 @@ import { discoverScriptsOnDisk } from './lib/discover-scripts.ts';
 
 dotenv.config();
 
+// ---- Admin unlock (restricted tools) ----
+// 受限工具（manifest 標記 `locked: true`）需先輸入 ADMIN_PASSCODE 解鎖後才在列表出現。
+// 密碼來自 AI Studio Secrets 面板注入的環境變數，絕不寫進版控或前端 bundle。
+const ADMIN_PASSCODE = process.env.ADMIN_PASSCODE || '';
+const UNLOCK_TOKEN_SECRET = ADMIN_PASSCODE || 'toolweb-default-secret';
+
+/** 以 HMAC-SHA256 簽發短效解鎖 token，避免每次請求都明文傳密碼。 */
+function signUnlockToken(): string {
+  const payload = `${Date.now()}`;
+  const sig = crypto.createHmac('sha256', UNLOCK_TOKEN_SECRET).update(payload).digest('hex');
+  return `${payload}.${sig}`;
+}
+
+/** 驗證解鎖 token 是否由本伺服器簽發，且在有效期限內（預設 30 天）。 */
+function verifyUnlockToken(token: string | undefined): boolean {
+  if (!token) return false;
+  const [payload, sig] = token.split('.');
+  if (!payload || !sig) return false;
+  const expected = crypto.createHmac('sha256', UNLOCK_TOKEN_SECRET).update(payload).digest('hex');
+  if (sig !== expected) return false;
+  const issuedAt = parseInt(payload, 10);
+  if (Number.isNaN(issuedAt)) return false;
+  const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+  return Date.now() - issuedAt < MAX_AGE_MS;
+}
+
+/** 判斷請求是否已解鎖（Authorization: Bearer <token> 或 query ?token=）。 */
+function isUnlocked(req: express.Request): boolean {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : (req.query.token as string | undefined);
+  return verifyUnlockToken(token);
+}
+
 // Initialize Gemini
 const apiKey = process.env.GEMINI_API_KEY;
 const ai = new GoogleGenAI({
@@ -369,7 +402,10 @@ async function startServer() {
     }
     const seen = new Set<string>();
     const clean: any[] = [];
+    const unlocked = isUnlocked(req);
     for (const t of apkToolsStore) {
+      // 受限工具：未解鎖的請求直接不返回（列表與計數都藏住，不洩漏其存在）。
+      if (t.locked && !unlocked) continue;
       const canonicalId = (t.id === 'adskip' || t.packageName === 'com.utility.adskip') ? 'adskip-apk' : t.id;
       if (!seen.has(canonicalId)) {
         seen.add(canonicalId);
@@ -377,6 +413,20 @@ async function startServer() {
       }
     }
     res.json(clean);
+  });
+
+  // API: 解鎖受限工具。POST { passcode } → 正確則簽發 Bearer token。
+  app.post("/api/unlock", (req, res) => {
+    const { passcode } = req.body || {};
+    if (!ADMIN_PASSCODE) {
+      return res.status(500).json({
+        error: '伺服器未設定 ADMIN_PASSCODE 環境變數，無法解鎖。請於 AI Studio Secrets 面板加入。',
+      });
+    }
+    if (typeof passcode !== 'string' || passcode !== ADMIN_PASSCODE) {
+      return res.status(401).json({ error: '密碼錯誤' });
+    }
+    res.json({ token: signUnlockToken() });
   });
 
 

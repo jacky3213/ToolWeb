@@ -114,8 +114,18 @@ push 至 `main` 分支後，於 Google AI Studio 重新 pull 並發布。
 |---|---|---|
 | `GEMINI_API_KEY` | AI 助理功能（`POST /api/chat`） | 選用 |
 | `GITHUB_RAW_BASE` | 腳本 Raw CDN 位置 | 選用（有預設值） |
+| `ADMIN_PASSCODE` | 受限工具解鎖密碼（`locked: true` 的條目需輸入才顯示） | 選用（未設定時 `/api/unlock` 回 500） |
 
-> 網站已無任何寫入端點，因此不需要 `ADMIN_PASSCODE`。
+### 受限工具（locked）
+
+manifest 條目可標記 `"locked": true`，該工具在未解鎖時**不會出現在列表**（連計數都藏住）。
+
+- 前端彈出密碼框 → `POST /api/unlock { passcode }` → 後端比對 `ADMIN_PASSCODE` 環境變數
+- 通過後簽發 **HMAC-SHA256 token**（30 天有效），前端存 localStorage，之後 `/api/tools` 帶 `?token=` 即可看到受限工具
+- 密碼只在後端（AI Studio Secrets 面板注入），**不進前端 bundle、不進版控**
+
+> ⚠️ 只隱藏**列表**。受限工具的 `.user.js` / APK 下載端點仍是公開的（為維持 Tampermonkey 自動更新），
+> 真正需要徹底保密時，還得對下載端點加同等鑑權。
 
 ## 下載統計
 

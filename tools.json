@@ -252,6 +252,7 @@
       }
     },
     "isOfficial": true,
-    "isFeatured": false
+    "isFeatured": false,
+    "locked": true
   }
 ]
