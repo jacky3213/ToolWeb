@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Smartphone, Plus, ShieldCheck, Sparkles, ArrowUpDown, Lock, CheckCircle2, FileCheck2, Trash2, Code2 } from 'lucide-react';
 import { ApkTool, ToolCategory } from './types';
-import { INITIAL_TOOLS } from './data';
 import { Header } from './components/Header';
 import { ToolCard } from './components/ToolCard';
 import { ToolDetailModal } from './components/ToolDetailModal';

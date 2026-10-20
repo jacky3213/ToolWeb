@@ -38,7 +38,6 @@ if (!fs.existsSync(DATA_DIR)) {
 // auth cookie wall to Tampermonkey, breaking update checks silently.)
 const GITHUB_RAW_BASE = process.env.GITHUB_RAW_BASE || 'https://raw.githubusercontent.com/jacky3213/ToolWeb/main/public/apks';
 
-const TOOLS_FILE = path.join(DATA_DIR, 'tools.json');
 const ADMIN_FILE = path.join(DATA_DIR, 'admin.json');
 
 
@@ -60,17 +59,53 @@ function loadManifest(): any[] {
   return parsed;
 }
 
-// manifest 提供顯示中繼資料；目錄列舉確保「push 到 GitHub 即生效」，包含全新腳本。
-let apkToolsStore: any[] = reconcile(
-  loadManifest(),
-  discoverScriptsOnDisk(UPLOADS_DIR)
-);
+/**
+ * 合併 manifest 與磁碟檔案清單，並在有 manifest 條目因檔案遺失而被丟棄時發出警告。
+ *
+ * 「目錄是事實來源」意味著 public/apks/ 裡的檔案不見了，該工具就會從網站消失。
+ * 這是刻意的死連結防護，但若不提示，部署時檔案漏打包會讓整個網站靜默變空。
+ */
+function buildToolStore(): any[] {
+  const manifest = loadManifest();
+  const onDisk = discoverScriptsOnDisk(UPLOADS_DIR);
+  const store = reconcile(manifest, onDisk);
 
-console.log(`[Config] 已載入 ${apkToolsStore.length} 個工具（manifest + 目錄列舉）`);
+  const presentFiles = new Set(onDisk.map(f => f.fileName));
+  const missing = manifest
+    .map(entry => entry.scriptFileName || entry.apkFileName)
+    .filter((file): file is string => Boolean(file) && !presentFiles.has(file as string));
 
+  if (missing.length > 0) {
+    console.warn(
+      `[Config] ⚠️ 以下 manifest 條目因檔案不存在於 ${UPLOADS_DIR} 而被略過：\n` +
+      missing.map(f => `  - ${f}`).join('\n') +
+      `\n  請確認這些檔案已提交至版控（public/apks/）。`
+    );
+  }
+
+  if (manifest.length > 0 && store.length === 0) {
+    console.error(
+      `[Config] ⛔ manifest 有 ${manifest.length} 個條目，但合併後 0 個工具。` +
+      `通常是 ${UPLOADS_DIR} 缺少檔案 —— 網站將顯示為空白。`
+    );
+  }
+
+  return store;
+}
+
+let apkToolsStore: any[] = buildToolStore();
+
+console.log(`[Config] 已載入 ${apkToolsStore.length} 個工具（manifest ${loadManifest().length} 筆 + 目錄列舉 ${apkToolsStore.length} 筆）`);
+
+/**
+ * 記憶體內去重並正規化工具 id。
+ *
+ * 刻意「不寫入磁碟」—— 雲端部署的容器磁碟是暫存的，
+ * 把狀態寫回 data/tools.json 只會造成下次重啟時資料不一致。
+ * 工具清單的唯一事實來源是 repo 根目錄的 tools.json。
+ */
 function saveTools() {
   try {
-    // Deduplicate before saving to prevent any duplicates from accumulating
     const seen = new Set<string>();
     const clean: any[] = [];
     for (const t of apkToolsStore) {
@@ -81,28 +116,8 @@ function saveTools() {
       }
     }
     apkToolsStore = clean;
-    fs.writeFileSync(TOOLS_FILE, JSON.stringify(apkToolsStore, null, 2), 'utf-8');
   } catch (e) {
-    console.error("Failed to write tools.json:", e);
-  }
-}
-
-// Persistence for download delta counts (so increments stay persistent alongside Google Drive base count)
-const DELTAS_FILE = path.join(DATA_DIR, 'downloads_delta.json');
-let downloadsDelta: Record<string, number> = {};
-if (fs.existsSync(DELTAS_FILE)) {
-  try {
-    downloadsDelta = JSON.parse(fs.readFileSync(DELTAS_FILE, 'utf-8'));
-  } catch (e) {
-    downloadsDelta = {};
-  }
-}
-
-function saveDeltas() {
-  try {
-    fs.writeFileSync(DELTAS_FILE, JSON.stringify(downloadsDelta, null, 2), 'utf-8');
-  } catch (e) {
-    console.error("Failed to write downloads_delta.json:", e);
+    console.error("Failed to dedupe tools:", e);
   }
 }
 
@@ -453,10 +468,8 @@ async function startServer() {
     const { id } = req.params;
     const tool = apkToolsStore.find(t => t.id === id);
     if (tool) {
-      downloadsDelta[id] = (downloadsDelta[id] || 0) + 1;
       tool.downloadCount = (tool.downloadCount || 0) + 1;
       saveTools();
-      saveDeltas();
 
       // Automatically record to Google Form in background
       recordDownloadToGoogleForm(id, tool.version || 'v1.0').catch(console.error);
@@ -537,10 +550,8 @@ async function startServer() {
     }
 
     // Increment download count (persisted across restarts and synced with Google Drive base)
-    downloadsDelta[id] = (downloadsDelta[id] || 0) + 1;
     tool.downloadCount = (tool.downloadCount || 0) + 1;
     saveTools();
-    saveDeltas();
 
     // Automatically record download event to Google Form
     recordDownloadToGoogleForm(id, tool.version || 'v1.0').catch(console.error);
@@ -656,10 +667,8 @@ async function startServer() {
           t.downloadUrl === `/api/download/${filename}`
         );
         if (linkedTool) {
-          downloadsDelta[linkedTool.id] = (downloadsDelta[linkedTool.id] || 0) + 1;
           linkedTool.downloadCount = (linkedTool.downloadCount || 0) + 1;
           saveTools();
-          saveDeltas();
           recordDownloadToGoogleForm(linkedTool.id, linkedTool.version || 'v1.0').catch(console.error);
         }
       }
@@ -716,10 +725,8 @@ async function startServer() {
             t.downloadUrl === `/api/download/${filename}`
           );
           if (linkedTool) {
-            downloadsDelta[linkedTool.id] = (downloadsDelta[linkedTool.id] || 0) + 1;
             linkedTool.downloadCount = (linkedTool.downloadCount || 0) + 1;
             saveTools();
-            saveDeltas();
             recordDownloadToGoogleForm(linkedTool.id, linkedTool.version || 'v1.0').catch(console.error);
           }
         }
