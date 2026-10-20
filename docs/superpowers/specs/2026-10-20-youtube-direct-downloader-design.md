@@ -129,7 +129,8 @@ tests/                        ← 子專案內自帶 tests/ 目錄
 - Tampermonkey header：`@updateURL`/`@downloadURL` 由 ToolWeb 伺服器動態注入
   GitHub Raw（既有機制，不需自己寫）
 - `@connect`：`*.youtube.com`、`*.googlevideo.com`、`*.youtubei.googleapis.com`
-- `@grant`：`GM_xmlhttpRequest`、`GM_download`（退回用）、`GM_setValue/getValue`
+- `@grant`：`unsafeWindow`、`GM_xmlhttpRequest`、`GM_setValue/getValue`
+  （Blob 退回用同源 anchor 下載，不需要 GM_download）
 
 ## 6. 測試策略
 
