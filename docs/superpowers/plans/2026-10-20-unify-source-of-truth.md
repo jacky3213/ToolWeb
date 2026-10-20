@@ -740,15 +740,24 @@ async function getDownloadCountsFromSheet(): Promise<Record<string, number>> {
 }
 
 /**
- * 以 Sheet 統計覆寫每個工具的下載數。
- * 查無紀錄的工具設為 0 —— 不使用 manifest 的 baseDownloadCount、不做 Math.max 猜測。
- * Sheet 抓取失敗時沿用上一輪快取值，不顯示假數字。
+ * 以 Sheet 統計更新每個工具的下載數。
+ *
+ * **單調不減：** 取 Sheet 值與當前值的較大者。
+ * 下載點擊時前端（`src/App.tsx:84`）與後端都會即時 +1，讓使用者立刻看到數字變化；
+ * 但 Google Form 寫入 Sheet 有延遲，若直接覆寫會讓數字「先跳上去再掉回來」。
+ * 下載次數是累計值，顯示上不應該倒退。
+ *
+ * 這與被移除的 `Math.max(sheetCount, memoryDelta)` 語意不同：
+ * 舊的是「從兩個不可靠來源猜測重建數字」，新的是「累計值不得倒退」。
+ *
+ * 代價：若 Google Form 提交永久失敗，顯示值會略高於 Sheet 真實值，直到伺服器重啟才校正。
  */
 async function refreshDownloadCounts(): Promise<void> {
   try {
     const counts = await getDownloadCountsFromSheet();
     for (const tool of apkToolsStore) {
-      tool.downloadCount = counts[tool.id] || 0;
+      const sheetCount = counts[tool.id] || 0;
+      tool.downloadCount = Math.max(sheetCount, tool.downloadCount || 0);
     }
   } catch (err: any) {
     console.error("[Stats] 無法更新下載統計，沿用上一輪數值:", err?.message || err);
@@ -756,7 +765,28 @@ async function refreshDownloadCounts(): Promise<void> {
 }
 ```
 
-- [ ] **Step 4: 在開機時啟動統計排程**
+- [ ] **Step 4b: 撰寫單調性的測試**
+
+`tests/sheet-cache.test.ts` 追加：
+
+```typescript
+test('刷新後下載數不得倒退（Sheet 落後於本機計數時）', () => {
+  const current = 921;
+  const sheetCount = 920;
+  assert.equal(Math.max(sheetCount, current), 921);
+});
+
+test('Sheet 數字較新時應採用 Sheet 值', () => {
+  const current = 900;
+  const sheetCount = 950;
+  assert.equal(Math.max(sheetCount, current), 950);
+});
+```
+
+執行：`npm test`
+預期：PASS（23 tests）
+
+- [ ] **Step 5: 在開機時啟動統計排程**
 
 在 `startServer()` 內、伺服器 listen 之後加入：
 
@@ -776,7 +806,7 @@ statsTimer.unref?.();
 執行：`npm run lint && npm test`
 預期：全部通過
 
-- [ ] **Step 6: 驗證統計確實會更新**
+- [ ] **Step 6: 驗證統計確實會更新且不倒退**
 
 ```bash
 node node_modules/tsx/dist/cli.mjs server.ts &
@@ -786,6 +816,17 @@ curl -s http://localhost:3000/api/tools | node -e "let d='';process.stdin.on('da
 
 預期：每個工具都有數字（若 Sheet 尚無紀錄則為 0）。
 **關鍵是伺服器 log 中出現 `[Google Sheet Counter] Loaded counts:`** — 證明 Sheet 讀取運作中。
+
+- [ ] **Step 6b: 驗證下載後數字即時 +1 且 5 分鐘後不倒退**
+
+```bash
+# 記錄當前數字
+curl -s http://localhost:3000/api/download/adskip.apk -o /dev/null
+curl -s http://localhost:3000/api/tools | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const t=JSON.parse(d).find(x=>x.id==='adskip-apk');console.log('下載後:',t.downloadCount)})"
+```
+
+預期：數字比下載前多 1（後端 `server.ts:923` 的記憶體自增）。
+等待 5 分鐘後再次查詢，**數字不應倒退**。
 
 - [ ] **Step 7: Commit**
 
