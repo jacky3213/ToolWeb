@@ -25,11 +25,62 @@ class FakeMediaSource {
   }
 }
 
+// 建立 capture 的標準方式：注入 FakeMediaSource 與 FakeSourceBuffer。
+function mkCapture() {
+  return createCapture({
+    getMediaSource: () => FakeMediaSource,
+    getSourceBuffer: () => FakeSourceBuffer,
+  });
+}
+
 // ---- 測試用的資料工廠 ----
 
 function makeInit() {
-  // 前 4 bytes 為 'ftyp' (0x66 0x74 0x79 0x70)
-  return new Uint8Array([0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]);
+  // 合法的 ftyp box：前 4 bytes 是 size(8)，第 5–8 bytes 是 'ftyp'
+  return new Uint8Array([0, 0, 0, 8, 0x66, 0x74, 0x79, 0x70]);
+}
+
+// 建立一個帶 moov→trak→mdia→hdlr 的完整 init segment，供 detectTrackKind 解析。
+// handlerType：'vide' 或 'soun'
+function makeInitWithHandler(handlerType) {
+  const hdlrHandler = handlerType === 'vide'
+    ? [0x76, 0x69, 0x64, 0x65] // 'vide'
+    : [0x73, 0x6f, 0x75, 0x6e]; // 'soun'
+
+  // hdlr box: [size][type='hdlr'][version+flags 4B][pre_defined 4B][handler_type 4B][...]
+  const hdlrPayload = [
+    0x00, 0x00, 0x00, 0x00, // version + flags
+    0x00, 0x00, 0x00, 0x00, // pre_defined
+    ...hdlrHandler,          // handler_type
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // reserved + name
+  ];
+  const hdlrBox = buildBox('hdlr', new Uint8Array(hdlrPayload));
+
+  // mdia box: [size]['mdia'][hdlr box]
+  const mdiaBox = buildBox('mdia', hdlrBox);
+
+  // trak box: [size]['trak'][mdia box]
+  const trakBox = buildBox('trak', mdiaBox);
+
+  // moov box: [size]['moov'][trak box]
+  const moovBox = buildBox('moov', trakBox);
+
+  // ftyp box + moov box
+  const ftyp = makeInit();
+  return concatBytes(ftyp, moovBox);
+}
+
+function buildBox(type, payload) {
+  const size = 8 + payload.length;
+  const out = new Uint8Array(size);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0, size);
+  out[4] = type.charCodeAt(0);
+  out[5] = type.charCodeAt(1);
+  out[6] = type.charCodeAt(2);
+  out[7] = type.charCodeAt(3);
+  out.set(payload, 8);
+  return out;
 }
 
 function makeMedia(tag) {
@@ -59,15 +110,20 @@ async function blobBytes(blob) {
 // 1. isInitSegment 判斷 ftyp
 // ===========================================================================
 
-test('isInitSegment：ftyp 開頭為 true，其他為 false', () => {
-  assert.equal(isInitSegment(makeInit()), true);
+test('isInitSegment：mp4(ftyp) 與 webm(EBML) 兩種 init 都要判斷', () => {
+  assert.equal(isInitSegment(makeInit()), true, 'mp4 ftyp init');
   assert.equal(isInitSegment(makeInit().buffer), true, 'ArrayBuffer 輸入也應判斷');
 
-  const notInit = new Uint8Array([0x00, 0x00, 0x00, 0x08, 0x6d, 0x6f, 0x6f, 0x76]); // moov
+  // webm/EBML：offset 0–3 = 0x1A 0x45 0xDF 0xA3
+  const webmInit = new Uint8Array([0x1A, 0x45, 0xDF, 0xA3, 0x93, 0x42, 0x82, 0x88]);
+  assert.equal(isInitSegment(webmInit), true, 'webm EBML init');
+
+  // 非 init：前 4 bytes 是 size，第 5–8 不是 ftyp，也非 EBML
+  const notInit = new Uint8Array([0, 0, 0, 8, 0x6d, 0x6f, 0x6f, 0x76]); // moov
   assert.equal(isInitSegment(notInit), false);
 
-  assert.equal(isInitSegment(new Uint8Array([1, 2, 3])), false, '不足 4 bytes');
-  assert.equal(isInitSegment(new Uint8Array(4)), false, '全 0 不是 ftyp');
+  assert.equal(isInitSegment(new Uint8Array([1, 2, 3, 4, 5, 6, 7])), false, '不足 4 bytes');
+  assert.equal(isInitSegment(new Uint8Array(8)), false, '全 0 不是 init');
 });
 
 // ===========================================================================
@@ -75,7 +131,7 @@ test('isInitSegment：ftyp 開頭為 true，其他為 false', () => {
 // ===========================================================================
 
 test('video/audio 依 mime 正確分流', async () => {
-  const capture = createCapture({ getMediaSource: () => FakeMediaSource });
+  const capture = mkCapture();
   capture.start();
 
   const ms = new FakeMediaSource();
@@ -101,7 +157,7 @@ test('video/audio 依 mime 正確分流', async () => {
 // ===========================================================================
 
 test('init segment 在最前，media segments 依序（正常順序）', async () => {
-  const capture = createCapture({ getMediaSource: () => FakeMediaSource });
+  const capture = mkCapture();
   capture.start();
 
   const ms = new FakeMediaSource();
@@ -119,7 +175,7 @@ test('init segment 在最前，media segments 依序（正常順序）', async (
 });
 
 test('init segment 在最前：即便 init 晚於 media 抵達也要置前', async () => {
-  const capture = createCapture({ getMediaSource: () => FakeMediaSource });
+  const capture = mkCapture();
   capture.start();
 
   const ms = new FakeMediaSource();
@@ -141,7 +197,7 @@ test('init segment 在最前：即便 init 晚於 media 抵達也要置前', asy
 // ===========================================================================
 
 test('ArrayBuffer 與 Uint8Array 兩種 data 都能正規化收集', async () => {
-  const capture = createCapture({ getMediaSource: () => FakeMediaSource });
+  const capture = mkCapture();
   capture.start();
 
   const ms = new FakeMediaSource();
@@ -164,7 +220,7 @@ test('ArrayBuffer 與 Uint8Array 兩種 data 都能正規化收集', async () =>
 // ===========================================================================
 
 test('stop() 回傳正確的 { video, audio } Blob 且內容正確', async () => {
-  const capture = createCapture({ getMediaSource: () => FakeMediaSource });
+  const capture = mkCapture();
   capture.start();
 
   const ms = new FakeMediaSource();
@@ -196,7 +252,7 @@ test('stop() 回傳正確的 { video, audio } Blob 且內容正確', async () =>
 });
 
 test('getResult() 不卸鉤，可即時回傳當前收集', async () => {
-  const capture = createCapture({ getMediaSource: () => FakeMediaSource });
+  const capture = mkCapture();
   capture.start();
 
   const ms = new FakeMediaSource();
@@ -217,7 +273,7 @@ test('getResult() 不卸鉤，可即時回傳當前收集', async () => {
 });
 
 test('沒有 append 任何資料的 track 回傳 null', () => {
-  const capture = createCapture({ getMediaSource: () => FakeMediaSource });
+  const capture = mkCapture();
   capture.start();
   const ms = new FakeMediaSource();
   ms.addSourceBuffer('video/mp4; codecs="av01"'); // 建立 track 但沒 append
@@ -231,7 +287,7 @@ test('沒有 append 任何資料的 track 回傳 null', () => {
 // ===========================================================================
 
 test('掛鉤不影響原 appendBuffer：原始方法仍被呼叫', () => {
-  const capture = createCapture({ getMediaSource: () => FakeMediaSource });
+  const capture = mkCapture();
   capture.start();
 
   const ms = new FakeMediaSource();
@@ -251,7 +307,7 @@ test('掛鉤不影響原 appendBuffer：原始方法仍被呼叫', () => {
 // ===========================================================================
 
 test('重複 start 不重複掛（append 一次只收集一份）', async () => {
-  const capture = createCapture({ getMediaSource: () => FakeMediaSource });
+  const capture = mkCapture();
   capture.start();
   capture.start(); // 第二次應為 no-op，不會嵌套掛鉤
 
@@ -266,23 +322,64 @@ test('重複 start 不重複掛（append 一次只收集一份）', async () => 
   assert.deepEqual(got, concatBytes(init));
 });
 
-test('stop 卸鉤後 appendBuffer 不再被收集', async () => {
-  const capture = createCapture({ getMediaSource: () => FakeMediaSource });
+test('stop 後 appendBuffer 不再被收集（hook 常駐但 recording 關閉）', async () => {
+  const capture = mkCapture();
   capture.start();
 
   const ms = new FakeMediaSource();
   const v = ms.addSourceBuffer('video/mp4; codecs="av01"');
   v.appendBuffer(makeInit());
 
-  capture.stop(); // 卸鉤，還原 addSourceBuffer
+  capture.stop(); // recording 關閉，但 hook 常駐
 
-  // stop 後新建的 SourceBuffer 不應被包裝（append 不被收集）
-  const v2 = ms.addSourceBuffer('video/mp4; codecs="av01"');
-  assert.equal(v2.appended.length, 0, 'stop 後的新 sb 未被包裝前 appended 為空');
-  v2.appendBuffer(makeMedia(1));
+  // stop 後同一 SourceBuffer 再 append 不應被收集（recording=false）
+  v.appendBuffer(makeMedia(1));
 
   const r = capture.getResult();
   const got = await blobBytes(r.video);
   // 只包含 stop 前收集的 init，後來的 media 不應出現
   assert.deepEqual(got, concatBytes(makeInit()));
+});
+
+test('SourceBuffer 在 start 前建立，start 後 appendBuffer 仍能被攔到（核心修復）', async () => {
+  // 模擬真實情境：影片已播放、SourceBuffer 早已建立，使用者才點下載。
+  const capture = mkCapture();
+  const ms = new FakeMediaSource();
+  const v = ms.addSourceBuffer('video/mp4; codecs="av01"'); // start 前就建立
+
+  capture.start(); // 此時才掛鉤
+
+  const init = makeInitWithHandler('vide'); // 帶 moov/hdlr，供 detectTrackKind 判斷
+  const m1 = makeMedia(1);
+  v.appendBuffer(init); // 已存在的 SourceBuffer 也要能攔到
+  v.appendBuffer(m1);
+
+  const r = capture.stop();
+  const got = await blobBytes(r.video);
+  assert.deepEqual(got, concatBytes(init, m1), '已存在的 SourceBuffer 應被攔到');
+});
+
+test('start() 清空 media 但保留 init segment（moov），避免拼出無 moov 的 Blob', async () => {
+  const capture = mkCapture();
+  const ms = new FakeMediaSource();
+  const v = ms.addSourceBuffer('video/mp4; codecs="av01"');
+
+  // 第一次 start + 收集 init + 一些 media（模擬「點下載前」已播放）
+  capture.start();
+  const init = makeInitWithHandler('vide');
+  v.appendBuffer(init);
+  v.appendBuffer(makeMedia(1));
+  v.appendBuffer(makeMedia(2));
+
+  // 第二次 start（點下載）：應清空 media，但保留 init
+  capture.start();
+
+  // 重新 append 新的 media（模擬 16x 跟播）
+  const m3 = makeMedia(3);
+  v.appendBuffer(m3);
+
+  const r = capture.stop();
+  const got = await blobBytes(r.video);
+  // 結果應是 init + m3，而不是 init + m1 + m2 + m3（舊 media 被清掉）
+  assert.deepEqual(got, concatBytes(init, m3), 'init 應保留、舊 media 應清空');
 });
