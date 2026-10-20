@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isGoogleVideoUrl, stripRangeParams, containerOf,
-  pairVideoAudio, buildQualityList, pickAudioTrack,
+  pairVideoAudio, buildQualityList, pickAudioTrack, toLastModified,
 } from '../src/formats.js';
 
 test('isGoogleVideoUrl 接受合法網域並拒絕其他', () => {
@@ -66,4 +66,40 @@ test('pickAudioTrack 語言優先：指定語言 > 原聲 > 任一', () => {
   assert.equal(pickAudioTrack(tracks, 'ja').itag, 140);
   assert.equal(pickAudioTrack(tracks, 'zh-TW').itag, 141);
   assert.equal(pickAudioTrack(tracks, null).itag, 141);
+});
+
+// ---- toLastModified：SABR proto 的 uint64 欄位 ----
+//
+// 實際發生過：youtubei.js 的 Format.last_modified 是 Date 物件，
+// 原樣傳給 SabrFormat 會讓 protobuf 執行 BigInt("Sat Mar 29 2025 ...")，
+// 拋 SyntaxError: Cannot convert ... to a BigInt，整個 SABR 下載失敗。
+
+test('toLastModified 優先取 last_modified_ms（原始微秒字串）', () => {
+  const f = {
+    last_modified: new Date('2025-03-29T09:56:54.000Z'), // youtubei.js 的 Date
+    last_modified_ms: '1743242214000000',                // 原始微秒字串
+  };
+  assert.equal(toLastModified(f), '1743242214000000');
+});
+
+test('toLastModified 只有 Date 時轉成微秒（不可回傳人類可讀字串）', () => {
+  const d = new Date('2025-03-29T09:56:54.000Z');
+  const out = toLastModified({ last_modified: d });
+  assert.equal(out, String(d.getTime() * 1000));
+  assert.match(out, /^\d+$/, '必須是純數字，否則 protobuf uint64 會拋 BigInt 錯誤');
+});
+
+test('toLastModified 接受 camelCase 數字字串與 number，並過濾空值', () => {
+  assert.equal(toLastModified({ lastModified: '1743242214000000' }), '1743242214000000');
+  assert.equal(toLastModified({ lastModified: 1743242214000000 }), '1743242214000000');
+  assert.equal(toLastModified({}), '0');
+  assert.equal(toLastModified(null), '0');
+  assert.equal(toLastModified({ last_modified_ms: '   ' }), '0');
+});
+
+test('toLastModified 永不放行無法解析的字串或 Date 的 toString()', () => {
+  // Date 的 toString 形式若被當成字串傳入，必須轉成數字而不是原樣回傳
+  const s = new Date('2025-03-29T09:56:54.000Z').toString();
+  assert.match(toLastModified({ lastModified: s }), /^\d+$/);
+  assert.match(toLastModified({ lastModified: 'not-a-date' }), /^\d+$/);
 });

@@ -12,7 +12,7 @@
 import { SabrStream } from 'googlevideo/sabr-stream';
 import { ReadableStreamSource } from 'mediabunny';
 import { Constants } from 'youtubei.js/web';
-import { isGoogleVideoUrl } from './formats.js';
+import { isGoogleVideoUrl, toLastModified } from './formats.js';
 
 // StreamerContext.ClientInfo.clientName 是「數字」enum（proto 以 int32 寫入），
 // 但 youtubei.js 的 context.client.clientName 是「字串」（"WEB" / "TVHTML5_SIMPLY" …）。
@@ -77,7 +77,7 @@ function buildClientInfo(info) {
 
 /**
  * 將 youtubei.js 的 Format 陣列對應為 googlevideo 的 SabrFormat[]。
- * SabrFormat 必填欄位：itag(number) / lastModified(string) / bitrate(number) /
+ * SabrFormat 必填欄位：itag(number) / lastModified(string，微秒) / bitrate(number) /
  * approxDurationMs(number)；其餘選填。SABR 的 chooseFormat 會依 mimeType 過濾
  * preferMP4/preferH264，故 mimeType 也要帶上。
  */
@@ -92,7 +92,7 @@ function toSabrFormats(streamingData) {
     if (!itag) continue;
     out.push({
       itag,
-      lastModified: str(f?.last_modified ?? f?.lastModified),
+      lastModified: toLastModified(f),
       mimeType: f?.mime_type ?? f?.mimeType,
       bitrate: Number(f?.bitrate ?? f?.average_bitrate ?? 0),
       approxDurationMs: Number(f?.approx_duration_ms ?? f?.approxDurationMs ?? 0),

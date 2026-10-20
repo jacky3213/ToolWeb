@@ -212,8 +212,8 @@
     "id": "youtube-direct-downloader",
     "name": "YouTube 直連下載 (Direct Downloader)",
     "packageName": "https://github.com/jacky3213",
-    "version": "v0.1.4",
-    "versionCode": 104,
+    "version": "v0.1.5",
+    "versionCode": 105,
     "minSdk": "Tampermonkey (Chrome/Edge 建議，高畫質合併需 File System Access API)",
     "architecture": "universal",
     "fileSize": "1075 KB",
@@ -222,6 +222,7 @@
     "summary": "在瀏覽器內直接下載 YouTube 影片與 Shorts，音視頻無損合併，不經第三方解析站",
     "description": "在 YouTube 影片與 Shorts 頁面一鍵下載：多客戶端直連串流、SABR/UMP 支援、畫質/容器/音軌語言選擇、瀏覽器內無損合併（不重新編碼）、Range 並發下載（1–8 路）、File System Access 串流寫盤、下載佇列與暫停/恢復/取消。僅供個人備份使用，請遵守著作權法與 YouTube 服務條款。",
     "changelog": [
+      "v0.1.5 修正 SABR/UMP 影片下載失敗（Cannot convert … to a BigInt）——youtubei.js 的 Format.last_modified 是 Date 物件，直接塞進 SABR 的 uint64 欄位會讓 protobuf 執行 BigInt(Date 字串) 而拋錯；改取原始微秒欄位並做型別正規化",
       "v0.1.4 修正存檔對話框失敗（Illegal invocation）——Tampermonkey 沙箱的 window 不是真 Window，原生 showSaveFilePicker 以它為 this 會被拒；改向 unsafeWindow 取值並 bind 回真 window，objectURL 同樣處理。修好後可走串流寫盤，不再整檔進記憶體",
       "v0.1.3 修正「按鈕一打開有出現、之後就消失」——改以 getBoundingClientRect() 判斷容器是否真的看得見，不再把按鈕搬進 display:none 的骨架節點；容器若轉為隱藏會自動退回左上角浮動，console 也會輸出按鈕目前位置",
       "v0.1.2 修正畫質清單空白、面板顯示「取得格式失敗」——YouTube 啟用 Trusted Types 後 `innerHTML` 一律被拒（連清空也一樣），改用 replaceChildren()；順手移除 el() 未使用的 html 屬性",
@@ -232,7 +233,7 @@
     "scriptFileName": "youtube-direct-downloader.user.js",
     "rating": 5,
     "releaseDate": "2026-10-20",
-    "checksumSha256": "51369072e0119b8e0f498722282d7e6fc00d7c345662a96dc9dc74708b9e0a49",
+    "checksumSha256": "f1d87d9fc00fbe533769394dfe98bd39dcac661c8c42c79e24f1ad0c78232152",
     "screenshots": [],
     "installGuide": {
       "steps": [
