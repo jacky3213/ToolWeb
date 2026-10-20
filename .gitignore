@@ -12,3 +12,6 @@ coverage/
 
 # 註：data/ 目錄已在移除管理功能後一併刪除。
 # 工具清單的唯一事實來源是 repo 根目錄的 tools.json，伺服器不再寫入任何狀態檔。
+
+# Tampermonkey 子專案：node_modules 不入庫
+userscripts/*/node_modules/
