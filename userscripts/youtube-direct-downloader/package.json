@@ -1,6 +1,6 @@
 {
   "name": "youtube-direct-downloader",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -9,9 +9,7 @@
     "build": "node build.mjs"
   },
   "dependencies": {
-    "googlevideo": "^4.1.1",
-    "mediabunny": "1.61.6",
-    "youtubei.js": "18.2.0"
+    "mediabunny": "1.61.6"
   },
   "devDependencies": {
     "esbuild": "0.28.2"

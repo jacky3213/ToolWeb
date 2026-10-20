@@ -210,51 +210,48 @@
   },
   {
     "id": "youtube-direct-downloader",
-    "name": "YouTube 直連下載 (Direct Downloader)",
+    "name": "YouTube 攔截下載 (MSE Capture Downloader)",
     "packageName": "https://github.com/jacky3213",
-    "version": "v0.1.6",
-    "versionCode": 106,
+    "version": "v0.2.0",
+    "versionCode": 200,
     "minSdk": "Tampermonkey (Chrome/Edge 建議，高畫質合併需 File System Access API)",
     "architecture": "universal",
-    "fileSize": "1076 KB",
+    "fileSize": "323 KB",
     "icon": "Terminal",
     "category": "Tampermonkey",
-    "summary": "在瀏覽器內直接下載 YouTube 影片與 Shorts，音視頻無損合併，不經第三方解析站",
-    "description": "在 YouTube 影片與 Shorts 頁面一鍵下載：多客戶端直連串流、SABR/UMP 支援、畫質/容器/音軌語言選擇、瀏覽器內無損合併（不重新編碼）、Range 並發下載（1–8 路）、File System Access 串流寫盤、下載佇列與暫停/恢復/取消。僅供個人備份使用，請遵守著作權法與 YouTube 服務條款。",
+    "summary": "攔截 YouTube 播放器的 SourceBuffer 分片，16x 靜音加速播放以快速抓取完整高畫質影片（視訊+音訊）",
+    "description": "攔截 YouTube 播放器餵給 SourceBuffer 的 fMP4 分片，以 16x 靜音加速播放快速從頭播到尾，攔下完整高畫質影片（視訊 + 音訊），再用 mediabunny 無損合併存檔。不依賴直連 URL、不碰 SABR 協議、不需 PO Token。僅供個人備份使用，請遵守著作權法與 YouTube 服務條款。",
     "changelog": [
-      "v0.1.6 SABR 下載進度回報——串流邊下載邊回報已下載位元組，修正進度條永遠卡在 0%（原本一開場就誤報「合併中」且此後無任何進度）；並加入 SABR 分片請求診斷日誌，方便排查串流 stall",
-      "v0.1.5 修正 SABR/UMP 影片下載失敗（Cannot convert … to a BigInt）——youtubei.js 的 Format.last_modified 是 Date 物件，直接塞進 SABR 的 uint64 欄位會讓 protobuf 執行 BigInt(Date 字串) 而拋錯；改取原始微秒欄位並做型別正規化",
-      "v0.1.4 修正存檔對話框失敗（Illegal invocation）——Tampermonkey 沙箱的 window 不是真 Window，原生 showSaveFilePicker 以它為 this 會被拒；改向 unsafeWindow 取值並 bind 回真 window，objectURL 同樣處理。修好後可走串流寫盤，不再整檔進記憶體",
-      "v0.1.3 修正「按鈕一打開有出現、之後就消失」——改以 getBoundingClientRect() 判斷容器是否真的看得見，不再把按鈕搬進 display:none 的骨架節點；容器若轉為隱藏會自動退回左上角浮動，console 也會輸出按鈕目前位置",
-      "v0.1.2 修正畫質清單空白、面板顯示「取得格式失敗」——YouTube 啟用 Trusted Types 後 `innerHTML` 一律被拒（連清空也一樣），改用 replaceChildren()；順手移除 el() 未使用的 html 屬性",
-      "v0.1.1 修正「安裝後完全看不到下載按鈕」——不再把按鈕注入 ytd-watch-metadata 本體（Polymer 首次渲染會清掉非自身子節點），改為只等 actions 列渲染完成後歸位，並加入每秒自我修復，Shorts 換片與 SPA 換頁後也會重新掛載",
-      "v0.1.0 首次發布——直連 URL 與 SABR 雙路徑、無損合併、佇列管理"
+      "v0.2.0 完全重寫為 MSE 攔截式下載——YouTube 反爬升級後直連/SABR 全面失效（SABR 需 PO Token attestation），改攔 SourceBuffer 拿到解密後的高畫質 fMP4，16x 靜音跟播快速抓取，繞開 PO Token 死結",
+      "v0.1.6 SABR 下載進度回報（已廢棄）",
+      "v0.1.5 修正 SABR BigInt 錯誤（已廢棄）",
+      "v0.1.0 首次發布——直連 URL 與 SABR 雙路徑（已廢棄）"
     ],
     "downloadUrl": "/api/download/youtube-direct-downloader.user.js",
     "scriptFileName": "youtube-direct-downloader.user.js",
     "rating": 5,
-    "releaseDate": "2026-10-20",
-    "checksumSha256": "2656bfc167e5c2bfaaf19a5c49c0df5214633766aa6cb142de51efce906716f0",
+    "releaseDate": "2026-10-21",
+    "checksumSha256": "b4d6ccbd9b8193af3fb85581f4778bb506d570f8381f1c4eb3a356ac46b0df0b",
     "screenshots": [],
     "installGuide": {
       "steps": [
         "安裝瀏覽器擴充 Tampermonkey（建議 Chrome / Edge，高畫質合併需 File System Access API）",
         "點擊「立即安裝腳本 (.user.js)」，Tampermonkey 會自動跳出安裝頁，按「安裝」",
-        "打開 YouTube 影片頁或 Shorts 頁（youtube.com/watch、youtube.com/shorts），播放器旁出現「⬇ 下載」按鈕即安裝成功",
-        "點擊「⬇ 下載」選擇畫質 / 容器 / 音軌語言，開始下載；可於佇列面板暫停 / 恢復 / 取消"
+        "打開 YouTube 影片頁（youtube.com/watch），先在播放器選好想要的高畫質，播放器旁出現「⬇ 下載」按鈕即安裝成功",
+        "點擊「⬇ 下載」→「開始攔截下載」，腳本會以 16x 靜音加速從頭播到尾，攔截完整分片後自動合併存檔"
       ],
-      "verify": "開啟 YouTube 頁面後按 F12 → Console 面板，應看到 [YT-DL] 的日誌輸出。若格式清單只出現 360p，請先在播放器選高畫質播放幾秒，再重新整理頁面讓腳本重新抓取可用格式。",
+      "verify": "開啟 YouTube 影片頁後按 F12 → Console，應看到 [YT-DL] 的日誌。點「開始攔截下載」後，進度會顯示「攔截中… 視訊 X MB · 音訊 Y MB」，播完後自動存檔。",
       "troubleshooting": {
-        "title": "安裝後影片頁沒有出現「⬇ 下載」按鈕？",
+        "title": "攔截下載失敗或檔案不完整？",
         "steps": [
-          "確認腳本已啟用：Tampermonkey 圖示 → Manage Dashboard → 找到 YouTube Direct Downloader → 確認開關為綠色",
+          "確認腳本已啟用：Tampermonkey 圖示 → Manage Dashboard → 找到 YouTube 攔截下載 → 確認開關為綠色",
           "開啟 Chrome／Edge，網址列輸入 chrome://extensions（Edge 為 edge://extensions）",
-          "找到 Tampermonkey，點「詳細資料」",
-          "找到「允許使用者指令碼」（Allow User Scripts）開關 → 打開",
+          "找到 Tampermonkey，點「詳細資料」→ 打開「允許使用者指令碼」（Allow User Scripts）",
           "確認網址是 youtube.com 網域（含 www. 與 m.），其他網域不會執行",
-          "重新整理影片頁，播放器旁應出現「⬇ 下載」按鈕"
+          "確認下載期間該分頁保持在前景（切到其他分頁會被瀏覽器限速，導致分片缺漏）",
+          "先在播放器手動選好高畫質再下載（腳本攔的是播放器「當前」畫質）"
         ],
-        "note": "說明：本腳本只支援一般影片與 Shorts，不支援 DRM 加密內容（如 YouTube Premium 電影 / 付費內容）與現場直播（Live），這類內容無法取得直連串流。Firefox 缺少 File System Access API，大檔會退回記憶體內合併，受限於可用記憶體，建議以 Chrome / Edge 下載高畫質大檔。本工具僅供個人備份使用，請遵守著作權法與 YouTube 服務條款。"
+        "note": "說明：本腳本只支援一般影片與 Shorts，不支援 DRM 加密內容（如 YouTube Premium 電影 / 付費內容）與現場直播（Live）。下載時間約等於影片時長 ÷ 16（16x 加速），需保持分頁在前景。Firefox 缺少 File System Access API，大檔會退回記憶體內合併，建議以 Chrome / Edge 下載高畫質大檔。本工具僅供個人備份使用，請遵守著作權法與 YouTube 服務條款。"
       }
     },
     "isOfficial": true,
