@@ -31,7 +31,6 @@ export function App() {
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isInstallGuideOpen, setIsInstallGuideOpen] = useState(false);
-  const [isSyncingDrive, setIsSyncingDrive] = useState(false);
 
   // Notification Toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -106,29 +105,6 @@ export function App() {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-    }
-  };
-
-  // Handle Manual Google Drive Sync
-  const handleSyncDrive = async () => {
-    try {
-      setIsSyncingDrive(true);
-      showToast('🔄 正在連線至 Google Drive 同步最新 APK 與 app-info.json 配置...');
-      const res = await fetch('/api/sync-gdrive?force=true', { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        if (Array.isArray(data.tools)) {
-          setTools(data.tools);
-        }
-        showToast(`✅ ${data.message || 'Google Drive 同步完成！'}`);
-      } else {
-        showToast(`⚠️ ${data.message || '同步失敗，請確認 Google Drive 連結'}`);
-      }
-    } catch (err) {
-      console.error('Failed to sync Drive:', err);
-      showToast('❌ 同步失敗，請稍後再試');
-    } finally {
-      setIsSyncingDrive(false);
     }
   };
 
@@ -227,8 +203,6 @@ export function App() {
         onOpenAddModal={() => setIsAddOpen(true)}
         onOpenInstallGuide={() => setIsInstallGuideOpen(true)}
         onOpenAdminModal={() => setIsAdminModalOpen(true)}
-        onSyncDrive={handleSyncDrive}
-        isSyncingDrive={isSyncingDrive}
         isUnlocked={isUnlocked}
       />
 

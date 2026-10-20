@@ -1,5 +1,5 @@
 import React from 'react';
-import { Smartphone, Plus, HelpCircle, ShieldCheck, Lock, Unlock, RefreshCw, FileCode, Code2 } from 'lucide-react';
+import { Plus, HelpCircle, ShieldCheck, Lock, Unlock, Code2 } from 'lucide-react';
 
 interface HeaderProps {
   toolCount: number;
@@ -7,8 +7,6 @@ interface HeaderProps {
   onOpenAddModal: () => void;
   onOpenInstallGuide: () => void;
   onOpenAdminModal: () => void;
-  onSyncDrive: () => void;
-  isSyncingDrive: boolean;
   isUnlocked: boolean;
 }
 
@@ -18,8 +16,6 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenAddModal,
   onOpenInstallGuide,
   onOpenAdminModal,
-  onSyncDrive,
-  isSyncingDrive,
   isUnlocked,
 }) => {
   return (
@@ -52,17 +48,6 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Stats & Actions */}
         <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
-        {/* Sync Google Drive Button */}
-        <button
-          onClick={onSyncDrive}
-          disabled={isSyncingDrive}
-          className="flex items-center gap-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-400/30 px-2 py-1.5 sm:px-2.5 sm:py-2 text-xs font-mono text-emerald-300 transition-all active:scale-95 disabled:opacity-50"
-          title="立即從 Google Drive 重新同步 APK/腳本 與設定"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 text-emerald-400 shrink-0 ${isSyncingDrive ? 'animate-spin' : ''}`} />
-          <span className="hidden sm:inline">{isSyncingDrive ? '同步中' : '同步 Drive'}</span>
-        </button>
-
           {/* Admin Lock Status Button */}
           <button
             onClick={onOpenAdminModal}
