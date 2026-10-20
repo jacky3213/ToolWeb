@@ -19,7 +19,7 @@ const VALID = `// ==UserScript==
 // ==/UserScript==
 `;
 
-test('只回傳 .user.js 檔案', () => {
+test('回傳 .user.js 與 .apk 檔案（忽略其他副檔名）', () => {
   const dir = makeTempDir({
     'a.user.js': VALID,
     'b.apk': 'binary',
@@ -30,8 +30,19 @@ test('只回傳 .user.js 檔案', () => {
   const result = discoverScriptsOnDisk(dir);
   fs.rmSync(dir, { recursive: true, force: true });
 
+  const names = result.map(r => r.fileName).sort();
+  assert.deepEqual(names, ['a.user.js', 'b.apk']);
+});
+
+test('APK 是二進位檔，無法解析 metadata，version 為 null', () => {
+  const dir = makeTempDir({ 'tool.apk': 'PK\x03\x04 binary content' });
+
+  const result = discoverScriptsOnDisk(dir);
+  fs.rmSync(dir, { recursive: true, force: true });
+
   assert.equal(result.length, 1);
-  assert.equal(result[0].fileName, 'a.user.js');
+  assert.equal(result[0].fileName, 'tool.apk');
+  assert.equal(result[0].version, null);
 });
 
 test('解析出腳本內的版本', () => {
