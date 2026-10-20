@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { reconcile } from '../lib/reconcile-tools.ts';
+import { reconcile, mergeToolStore } from '../lib/reconcile-tools.ts';
 
 interface ManifestEntry { id: string; scriptFileName: string; version: string; }
 interface DiskScript { fileName: string; version: string | null; }
@@ -116,4 +116,62 @@ test('混合情境：腳本與 APK 同時存在且皆被正確識別', () => {
   assert.equal(byId.get('adskip-apk')!.name, '開屏跳過');
   assert.equal(byId.get('olevod')!.name, 'Olevod');
   assert.equal(byId.get('new-tool')!.version, 'v2.0');
+});
+
+// --- mergeToolStore：週期性重建 store 時保留執行期狀態 ---
+
+test('新的清單中多出的工具會被加入', () => {
+  const current = [{ id: 'a', name: 'A', downloadCount: 10 }] as any[];
+  const desired = [
+    { id: 'a', name: 'A', version: 'v1' },
+    { id: 'b', name: 'B', version: 'v2' },
+  ] as any[];
+
+  const merged = mergeToolStore(current, desired);
+
+  assert.deepEqual(merged.map(m => m.id), ['a', 'b']);
+});
+
+test('合併時保留既有工具的下載次數（執行期狀態）', () => {
+  const current = [{ id: 'a', name: 'A', downloadCount: 42 }] as any[];
+  const desired = [{ id: 'a', name: 'A 更新後', version: 'v9' }] as any[];
+
+  const merged = mergeToolStore(current, desired);
+
+  assert.equal(merged[0].downloadCount, 42);
+  assert.equal(merged[0].name, 'A 更新後');
+});
+
+test('檔案被刪除的工具會從清單中消失', () => {
+  const current = [
+    { id: 'a', downloadCount: 1 },
+    { id: 'gone', downloadCount: 5 },
+  ] as any[];
+  const desired = [{ id: 'a', version: 'v1' }] as any[];
+
+  const merged = mergeToolStore(current, desired);
+
+  assert.deepEqual(merged.map(m => m.id), ['a']);
+});
+
+test('新工具沒有下載次數時初始為 undefined，由統計排程填入', () => {
+  const merged = mergeToolStore([], [{ id: 'new', version: 'v1' }] as any[]);
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, 'new');
+});
+
+test('自動建立的條目帶有腳本名稱與描述，網站才不會顯示空白', () => {
+  const disk = [{
+    fileName: 'brand-new.user.js',
+    version: 'v1.0',
+    name: '全新工具',
+    description: '自動發現的說明',
+  }] as any;
+
+  const [entry] = reconcile([], disk);
+
+  assert.equal(entry.name, '全新工具');
+  assert.equal(entry.description, '自動發現的說明');
+  assert.equal(entry.category, 'Tampermonkey');
 });

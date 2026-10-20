@@ -5,7 +5,7 @@ import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
-import { reconcile } from './lib/reconcile-tools.ts';
+import { reconcile, mergeToolStore } from './lib/reconcile-tools.ts';
 import { discoverScriptsOnDisk } from './lib/discover-scripts.ts';
 
 dotenv.config();
@@ -94,6 +94,25 @@ function buildToolStore(): any[] {
 }
 
 let apkToolsStore: any[] = buildToolStore();
+
+/**
+ * 重新掃描目錄並更新工具清單。
+ *
+ * buildToolStore() 只在開機時執行一次，若只靠它，新增的腳本要等到
+ * 伺服器重啟才會出現在網站上。使用者把新腳本 push 到 GitHub 後
+ * 期望的是「不需重新部署就出現」，因此這裡必須週期性重建。
+ *
+ * 以 mergeToolStore 取代 apkToolsStore，保留使用者當次下載累積的
+ * downloadCount，避免數字因為重建清單而跳動。
+ *
+ * @returns 新增的工具 id 列表（供日誌確認自動發現運作中）
+ */
+function refreshToolStore(): string[] {
+  const beforeIds = new Set(apkToolsStore.map(t => t.id));
+  const desired = buildToolStore();
+  apkToolsStore = mergeToolStore(apkToolsStore, desired);
+  return apkToolsStore.filter(t => !beforeIds.has(t.id)).map(t => t.id);
+}
 
 console.log(`[Config] 已載入 ${apkToolsStore.length} 個工具（manifest ${loadManifest().length} 筆 + 目錄列舉 ${apkToolsStore.length} 筆）`);
 
@@ -374,6 +393,16 @@ async function startServer() {
   app.get("/api/tools", (req, res) => {
     // Userscript source of truth is GitHub Raw — refresh frequently and cheaply
     if (Date.now() - lastGithubRefreshTime > 60 * 1000 && !isRefreshingGithub) {
+      // 先重建工具清單：讓「push 新腳本到 GitHub → 不重啟伺服器也會出現」成立。
+      // buildToolStore() 只在開機時跑一次，單靠它新增腳本要等伺服器重啟才看得見。
+      try {
+        const added = refreshToolStore();
+        if (added.length > 0) {
+          console.log(`[Config] 自動發現新工具：${added.join(', ')}`);
+        }
+      } catch (err: any) {
+        console.error('[Config] 重建工具清單失敗，沿用現有清單:', err?.message || err);
+      }
       refreshScriptsFromGitHub().catch(console.error);
     }
     const seen = new Set<string>();

@@ -39,7 +39,7 @@ export function discoverScriptsOnDisk(dir: string): DiskScript[] {
     const filePath = path.join(dir, fileName);
     try {
       if (isApk) {
-        scripts.push({ fileName, version: null });
+        scripts.push({ fileName, version: null, name: null, description: null });
         continue;
       }
 
@@ -47,7 +47,12 @@ export function discoverScriptsOnDisk(dir: string): DiskScript[] {
       const meta = parseUserScriptMetadata(content);
       if (!meta.name) continue; // 非有效 userscript
 
-      scripts.push({ fileName, version: meta.version });
+      scripts.push({
+        fileName,
+        version: meta.version,
+        name: meta.name,
+        description: meta.description,
+      });
     } catch {
       // 讀取失敗的檔案跳過，不影響其他腳本
     }

@@ -15,6 +15,10 @@ export interface ManifestEntry {
 export interface DiskScript {
   fileName: string;
   version: string | null;
+  /** 由腳本 @name 解析而來，讓自動建立的條目能顯示標題。 */
+  name?: string | null;
+  /** 由腳本 @description 解析而來。 */
+  description?: string | null;
 }
 
 /**
@@ -88,9 +92,43 @@ export function reconcile(
     result.push({
       id: idFromFileName(script.fileName),
       ...fileFieldFor(script.fileName),
+      // 由腳本 metadata 補上顯示欄位，否則自動發現的工具在網站上會是空白標題。
+      // category 固定為 Tampermonkey —— 只有 .user.js 會走到這個分支（.apk 的名稱無法從二進位解析）。
+      name: script.name ?? script.fileName,
+      summary: script.description ?? null,
+      description: script.description ?? null,
+      category: script.fileName.toLowerCase().endsWith('.apk') ? 'Utility' : 'Tampermonkey',
       version: script.version,
     } as ReconciledScript);
   }
 
   return result;
+}
+
+/**
+ * 以新算出的清單取代現有清單，但保留既有條目的執行期狀態。
+ *
+ * 用途：伺服器每 60 秒重新掃描目錄時使用。若直接整份覆寫，
+ * 使用者剛下載累積的 downloadCount 會被清成 undefined，
+ * 造成下載數字跳動。
+ *
+ * 規則：
+ * - 新清單有、舊清單無 → 新增
+ * - 新舊都有           → 以新清單的靜態資料為準，保留舊的下載次數
+ * - 舊清單有、新清單無 → 移除（檔案已被移除，不該再顯示死連結）
+ */
+export function mergeToolStore(
+  current: Array<{ id: string; downloadCount?: number }>,
+  desired: ManifestEntry[]
+): ReconciledScript[] {
+  const currentById = new Map(current.map(t => [t.id, t]));
+
+  return desired.map(entry => {
+    const existing = currentById.get(entry.id);
+    const merged = { ...entry } as ReconciledScript;
+    if (existing && typeof existing.downloadCount === 'number') {
+      merged.downloadCount = existing.downloadCount;
+    }
+    return merged;
+  });
 }

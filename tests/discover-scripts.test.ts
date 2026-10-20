@@ -54,6 +54,21 @@ test('解析出腳本內的版本', () => {
   assert.equal(result[0].version, 'v1.0');
 });
 
+test('回傳腳本的名稱與描述，讓自動建立的條目能顯示', () => {
+  const dir = makeTempDir({ 'y.user.js': `// ==UserScript==
+// @name         My Cool Tool
+// @version      1.0
+// @description  做了某件事
+// ==/UserScript==
+` });
+
+  const result = discoverScriptsOnDisk(dir);
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  assert.equal(result[0].name, 'My Cool Tool');
+  assert.equal(result[0].description, '做了某件事');
+});
+
 test('內容非 userscript 的 .user.js 檔會被跳過', () => {
   const dir = makeTempDir({ 'fake.user.js': 'console.log("not a userscript")' });
 
