@@ -29,6 +29,8 @@ class FakeNode {
     this.textContent = '';
     this._classes = new Set();
     this._listeners = {};
+    // 預設「有尺寸」= 看得見；用 hide() / show() 模擬 YouTube 的隱藏骨架節點
+    this._rect = { width: 120, height: 36 };
     const self = this;
     this.classList = {
       add: (...c) => c.forEach((x) => self._classes.add(x)),
@@ -51,6 +53,10 @@ class FakeNode {
     nodes.forEach((n) => this.appendChild(n));
   }
   setAttribute(k, v) { this.attrs[k] = String(v); }
+  getBoundingClientRect() { return this._rect; }
+  /** 模擬 display:none / 尺寸為 0 的骨架節點 */
+  hide() { this._rect = { width: 0, height: 0 }; }
+  show() { this._rect = { width: 120, height: 36 }; }
   appendChild(n) { n.parentNode = this; this.children.push(n); return n; }
   addEventListener(ev, fn) { (this._listeners[ev] ||= []).push(fn); }
   click() { (this._listeners.click || []).forEach((f) => f()); }
@@ -75,6 +81,11 @@ async function setup() {
     },
     getElementById: () => null,
     querySelector: (sel) => selectors[sel] || null,
+    querySelectorAll: (sel) => {
+      const v = selectors[sel];
+      if (!v) return [];
+      return Array.isArray(v) ? v : [v];
+    },
     addEventListener: () => {},
     contains(node) {
       let n = node;
@@ -208,4 +219,60 @@ test('容器消失（SPA 換頁）時退回浮動，保持可見', async () => {
 
   assert.ok(btn._classes.has('ytdl-btn-floating'), '應退回浮動狀態');
   assert.ok(document.contains(btn), '仍須留在文件內，不可消失');
+});
+
+// ---- 可見性：v0.1.3 修的「一打開有看到，之後就不見了」 ----
+//
+// YouTube 會留下尺寸為 0 的骨架節點。舊版只檢查 document.contains()，
+// 把按鈕搬進隱藏骨架後 contains 仍為 true，但人眼完全看不到。
+
+test('容器存在但量不到尺寸時，不把按鈕搬進去（維持浮動）', async () => {
+  const { ui, body, selectors } = await setup();
+
+  const hidden = new FakeNode('div');
+  hidden.hide();
+  body.appendChild(hidden);
+  selectors[BUTTON_SEL] = hidden;
+
+  ui.ensureButton();
+
+  const btn = findBtn(body.children);
+  assert.ok(btn, '按鈕應存在');
+  assert.ok(btn._classes.has('ytdl-btn-floating'), '應維持浮動，不可搬進隱藏容器');
+  assert.ok(!hidden.children.includes(btn), '不可被放進隱藏骨架');
+});
+
+test('同時存在隱藏與可見容器時，選擇可見的那個', async () => {
+  const { ui, body, selectors } = await setup();
+
+  const hidden = new FakeNode('div');
+  hidden.hide();
+  body.appendChild(hidden);
+  const visible = new FakeNode('div');
+  body.appendChild(visible);
+  selectors[BUTTON_SEL] = [hidden, visible]; // 隱藏的在前面，模擬 querySelector 先命中
+
+  ui.ensureButton();
+
+  assert.equal(visible.children.length, 1, '應放進可見的容器');
+  assert.equal(hidden.children.length, 0, '不可放進隱藏的容器');
+});
+
+test('容器後來變成隱藏（一閃就不見）時，按鈕退回浮動', async () => {
+  const { ui, body, selectors } = await setup();
+
+  const actions = new FakeNode('div');
+  body.appendChild(actions);
+  selectors[BUTTON_SEL] = actions;
+
+  ui.ensureButton();
+  const btn = findBtn(actions.children);
+  assert.ok(btn, '應先歸位到 actions 列');
+
+  actions.hide(); // YouTube 把 actions 列藏起來或換成隱藏骨架
+  ui.ensureButton(); // 看門狗每秒會做的事
+
+  assert.ok(btn._classes.has('ytdl-btn-floating'), '應退回浮動');
+  assert.equal(btn.parentNode, body, '應掛回 body');
+  assert.ok(document.contains(btn), '不可消失');
 });

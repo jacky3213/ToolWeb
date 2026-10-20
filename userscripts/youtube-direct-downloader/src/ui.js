@@ -296,10 +296,23 @@ export function createUI({ onStart, onPause, onResume, onCancel, onRefresh, onSe
 
   // ---- 按鈕：插入到影片頁 / Shorts 頁合適容器 ----
   //
-  // ⚠️ 不可把 `ytd-watch-metadata` / `ytd-reel-video-renderer` **本體**當容器。
-  // 它們是 Polymer host，首次 stamp 會清掉不是自己產生的子節點 —— 太早 append
-  // 進去的按鈕會被吃掉，而且不會報錯、不會重試，看起來就是「完全沒有按鈕」。
-  // 只接受 Polymer 真正渲染出來的 actions 列。
+  // ⚠️ 兩個已踩過的坑，改動前先讀：
+  // 1. 不可把 `ytd-watch-metadata` / `ytd-reel-video-renderer` **本體**當容器。
+  //    它們是 Polymer host，首次 stamp 會清掉不是自己產生的子節點 —— 按鈕被吃掉
+  //    且不報錯，看起來就是「完全沒有按鈕」。
+  // 2. 不可只用 `document.contains()` 判斷按鈕「在不在」。YouTube 會留下大量
+  //    display:none / 尺寸為 0 的骨架節點；把按鈕搬進去之後它仍在文件裡、
+  //    contains 依然是 true，但人眼完全看不到 —— 症狀是「一打開有看到，
+  //    之後就不見了」。所以一律用 getBoundingClientRect() 量實際尺寸。
+
+  /** 元素是否真的看得見（在文件內，且量得到尺寸）。 */
+  function isVisibleInPage(node) {
+    if (!node || !document.contains(node)) return false;
+    const rect = node.getBoundingClientRect();
+    return Boolean(rect && rect.width > 0 && rect.height > 0);
+  }
+
+  /** 找出「看得見」的 actions 列；同一選擇器可能同時命中隱藏與可見的多個節點。 */
   function findButtonContainer() {
     const selectors = [
       'ytd-watch-metadata #top-level-buttons-computed',
@@ -309,8 +322,10 @@ export function createUI({ onStart, onPause, onResume, onCancel, onRefresh, onSe
       '#top-level-buttons-computed',
     ];
     for (const sel of selectors) {
-      const node = document.querySelector(sel);
-      if (node) return node;
+      const nodes = document.querySelectorAll(sel);
+      for (let i = 0; i < nodes.length; i++) {
+        if (isVisibleInPage(nodes[i])) return nodes[i];
+      }
     }
     return null;
   }
@@ -328,6 +343,14 @@ export function createUI({ onStart, onPause, onResume, onCancel, onRefresh, onSe
     }
   }
 
+  // 位置只在變化時輸出，方便日後從 console 直接看出按鈕去了哪裡
+  let lastPlacement = '';
+  function notePlacement(label) {
+    if (label === lastPlacement) return;
+    lastPlacement = label;
+    console.log(`[YT-DL] 按鈕位置：${label}`);
+  }
+
   function ensureButton() {
     if (!buttonEl) {
       buttonEl = el('button', {
@@ -342,40 +365,32 @@ export function createUI({ onStart, onPause, onResume, onCancel, onRefresh, onSe
 
     const container = findButtonContainer();
 
-    if (!document.contains(buttonEl)) {
-      // 首次建立，或先前的按鈕被 YouTube 重新渲染時移除
-      if (container) {
+    if (container) {
+      // 有可見的 actions 列：不在裡面就搬進去（涵蓋首次掛載、SPA 換頁、Shorts 換片）
+      if (buttonEl.parentNode !== container) {
         resetButtonPosition();
         container.appendChild(buttonEl);
-      } else {
-        floatButton();
+        notePlacement('actions 列');
+        return;
       }
+      notePlacement(isVisibleInPage(buttonEl) ? 'actions 列' : 'actions 列（但量不到尺寸）');
       return;
     }
 
-    if (container) {
-      // 仍在浮動，或容器被換掉（SPA 換頁 / Shorts 切換）→ 歸位
-      if (buttonEl.classList.contains('ytdl-btn-floating') || buttonEl.parentNode !== container) {
-        resetButtonPosition();
-        container.appendChild(buttonEl);
-      }
-    } else if (!buttonEl.classList.contains('ytdl-btn-floating')) {
-      // 原容器消失：退回浮動，保持可見
+    // 沒有可用的 actions 列：一定要浮動而且看得見
+    if (!buttonEl.classList.contains('ytdl-btn-floating') || !isVisibleInPage(buttonEl)) {
       floatButton();
+      notePlacement('左上角浮動（等待 actions 列）');
     }
   }
 
-  // 低頻自我修復：YouTube 是 SPA，actions 列會被反覆重建，Shorts 換片也不觸發
-  // `yt-navigate-finish`。每秒只做一次 document.contains（成本可忽略），
-  // 僅在按鈕遺失或仍在浮動時才查詢選擇器。
+  // 每秒自我修復：YouTube 是 SPA，actions 列會被反覆重建，Shorts 換片也不觸發
+  // `yt-navigate-finish`。ensureButton() 是冪等的（已正確歸位時什麼都不做），
+  // 每秒一次的成本只是幾個 querySelectorAll 加尺寸量測。
   let anchorTimer = null;
   function startAnchorWatch() {
     if (anchorTimer) return;
-    anchorTimer = setInterval(() => {
-      if (!buttonEl || !document.contains(buttonEl) || buttonEl.classList.contains('ytdl-btn-floating')) {
-        ensureButton();
-      }
-    }, 1000);
+    anchorTimer = setInterval(ensureButton, 1000);
   }
 
   // 清除浮動樣式（歸位到頁面容器時用）
