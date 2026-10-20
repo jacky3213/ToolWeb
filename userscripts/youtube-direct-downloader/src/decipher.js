@@ -82,14 +82,15 @@ export function installEvalEnvironment() {
  * @param {object} info - VideoInfo (or compatible) object.
  * @returns {object|null}
  */
-function resolvePlayer(info) {
+async function resolvePlayer(info) {
   if (info && info.player) return info.player;
   if (info && info.actions &&
       info.actions.session && info.actions.session.player) {
     return info.actions.session.player;
   }
   if (typeof clientProvider === 'function') {
-    const provided = clientProvider();
+    // provider 可回傳 player 或 Promise<player>（main.js 注入 client 時自行取出 session.player）
+    const provided = await clientProvider();
     if (provided) return provided;
   }
   return null;
@@ -104,7 +105,7 @@ function resolvePlayer(info) {
  * @returns {Promise<string>} The deciphered URL.
  */
 export async function decipherFormat(info, format) {
-  const player = resolvePlayer(info);
+  const player = await resolvePlayer(info);
   if (!player) return format.url || '';
   const url = await format.decipher(player);
   if (!isGoogleVideoUrl(url)) {
@@ -121,7 +122,7 @@ export async function decipherFormat(info, format) {
  * @returns {Promise<string>} The deciphered URL.
  */
 export async function decipherServerUrl(info, url) {
-  const player = resolvePlayer(info);
+  const player = await resolvePlayer(info);
   if (!player) {
     throw new Error('No player available to decipher server_abr_streaming_url.');
   }
