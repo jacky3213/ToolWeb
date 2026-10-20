@@ -82,15 +82,22 @@ async function muxInternal({ videoInput, audioInput, container, target }) {
   if (audioInput) jobs.push(await registerTrack(audioInput, 'audio', output));
 
   // 所有軌註冊完畢後才能 start；start 之後才能 add 封包。
-  await output.start();
+  try {
+    await output.start();
 
-  // 各軌獨立拷貝，由 muxer 依時間戳交錯寫入；await 以尊重背壓。
-  await Promise.all(jobs.map((job) => copyTrack(job)));
+    // 各軌獨立拷貝，由 muxer 依時間戳交錯寫入；await 以尊重背壓。
+    await Promise.all(jobs.map((job) => copyTrack(job)));
 
-  await output.finalize();
-
-  if (videoInput) videoInput.dispose();
-  if (audioInput) audioInput.dispose();
+    await output.finalize();
+  } catch (err) {
+    // mux 失敗/取消：對尚未 finalize 的 target 呼叫 cancel() 釋放資源
+    // （例如 File System Access 的 writable，避免留下半成品檔案）
+    try { await output.cancel(); } catch { /* 已釋放或無 cancel */ }
+    throw err;
+  } finally {
+    if (videoInput) videoInput.dispose();
+    if (audioInput) audioInput.dispose();
+  }
 }
 
 // 兩個 Blob（已解密的 media 資料）→ 合併寫入 target（StreamTarget 或 BufferTarget）。

@@ -311,8 +311,14 @@ export function createUI({ onStart, onPause, onResume, onCancel, onRefresh, onSe
   }
 
   function ensureButton() {
-    // 已插入且仍掛在 DOM 上 → 跳過（SPA 導航後若被移除則會走下方重建）
-    if (buttonEl && document.contains(buttonEl)) return;
+    if (buttonEl && document.contains(buttonEl)) {
+      // 若先前因容器尚未出現而浮動在 body 上，現在容器有了就重新歸位
+      if (buttonEl.classList.contains('ytdl-btn-floating')) {
+        const later = findButtonContainer();
+        if (later) { resetButtonPosition(); later.appendChild(buttonEl); }
+      }
+      return;
+    }
     buttonEl = el('button', {
       class: 'ytdl-btn ytdl-style-base',
       id: 'ytdl-download-btn',
@@ -325,13 +331,24 @@ export function createUI({ onStart, onPause, onResume, onCancel, onRefresh, onSe
     if (container) {
       container.appendChild(buttonEl);
     } else {
-      // 找不到穩定容器時，浮動在左上角，保證可用
+      // 找不到穩定容器時，浮動在左上角，保證可用；之後容器出現會自動歸位
+      buttonEl.classList.add('ytdl-btn-floating');
       buttonEl.style.position = 'fixed';
       buttonEl.style.top = '8px';
       buttonEl.style.left = '8px';
       buttonEl.style.zIndex = '2147483647';
       document.body.appendChild(buttonEl);
     }
+  }
+
+  // 清除浮動樣式（歸位到頁面容器時用）
+  function resetButtonPosition() {
+    if (!buttonEl) return;
+    buttonEl.classList.remove('ytdl-btn-floating');
+    buttonEl.style.position = '';
+    buttonEl.style.top = '';
+    buttonEl.style.left = '';
+    buttonEl.style.zIndex = '';
   }
 
   // ---- 渲染畫質 / 語言 ----

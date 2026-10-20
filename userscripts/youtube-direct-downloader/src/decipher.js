@@ -106,7 +106,14 @@ async function resolvePlayer(info) {
  */
 export async function decipherFormat(info, format) {
   const player = await resolvePlayer(info);
-  if (!player) return format.url || '';
+  if (!player) {
+    // 無 player 時不得靜默放行原始 URL：仍須通過 googlevideo 白名單，否則拒絕
+    const raw = format.url || '';
+    if (!isGoogleVideoUrl(raw)) {
+      throw new Error('無法取得 player，且原始下載 URL 不在 googlevideo 白名單內。');
+    }
+    return raw;
+  }
   const url = await format.decipher(player);
   if (!isGoogleVideoUrl(url)) {
     throw new Error(`Deciphered format URL is not a googlevideo URL: ${url}`);

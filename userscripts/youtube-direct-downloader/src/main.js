@@ -308,6 +308,12 @@ async function runDownloadTask(job) {
     ui.setProgress({ loaded: 1, total: 1 });
     ui.setStatus('下載完成 ✅');
   } finally {
+    // 錯誤/取消路徑：mediabunny 不會觸及 FS writable，必須自行關閉，
+    // 否則磁碟上留下 0 位元組或半成品檔案且 handle 洩漏。
+    // 成功路徑 mediabunny 已關閉，這裡重複關閉會拋錯但被吞掉，屬安全。
+    if (target?.kind === 'fs' && target.writable) {
+      try { await target.writable.close(); } catch { /* 已關閉 */ }
+    }
     ui.setTaskButtons(false);
     currentTask = null;
   }
@@ -330,9 +336,14 @@ async function runNext() {
   try {
     await runDownloadTask(job);
   } catch (err) {
-    console.error('[YT-DL] 下載失敗', err);
-    ui.setError(err);
-    ui.setStatus('下載失敗');
+    if (err && err.name === 'AbortError') {
+      ui.setError(null);
+      ui.setStatus('已取消下載');
+    } else {
+      console.error('[YT-DL] 下載失敗', err);
+      ui.setError(err);
+      ui.setStatus('下載失敗');
+    }
   } finally {
     running = false;
     runNext();
