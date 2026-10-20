@@ -1,6 +1,9 @@
-// tests/ui-anchor.test.mjs
+// tests/ui.test.mjs
 //
-// 迴歸測試：v0.1.1 修掉的「按鈕被 Polymer 吃掉、永遠不出現」。
+// UI 迴歸測試。守兩個已實際發生過的 bug：
+//   1. v0.1.1：按鈕被 Polymer 吃掉、永遠不出現（見下）
+//   2. v0.1.2：`innerHTML` 被 YouTube 的 Trusted Types 政策擋下，
+//      導致畫質清單渲染失敗、面板顯示「取得格式失敗」
 //
 // 歷史：findButtonContainer() 曾把 `ytd-watch-metadata` 本體當容器，但它是 Polymer
 // host，首次 stamp 會清掉非自身渲染的子節點 → 剛 append 的按鈕被移除且不再重建。
@@ -37,7 +40,16 @@ class FakeNode {
     String(v).split(/\s+/).filter(Boolean).forEach((c) => this._classes.add(c));
   }
   get className() { return [...this._classes].join(' '); }
-  set innerHTML(_v) { this.children = []; this.textContent = ''; }
+  // 模擬 YouTube 的 Trusted Types：任何 innerHTML 指派都必須拋錯。
+  // 這是刻意的——若有人改回 `innerHTML = ''`，這裡會立刻失敗。
+  set innerHTML(_v) {
+    throw new TypeError("Failed to set the 'innerHTML' property on 'Element': This document requires 'TrustedHTML' assignment.");
+  }
+  replaceChildren(...nodes) {
+    this.children.forEach((c) => { c.parentNode = null; });
+    this.children = [];
+    nodes.forEach((n) => this.appendChild(n));
+  }
   setAttribute(k, v) { this.attrs[k] = String(v); }
   appendChild(n) { n.parentNode = this; this.children.push(n); return n; }
   addEventListener(ev, fn) { (this._listeners[ev] ||= []).push(fn); }
@@ -98,6 +110,39 @@ async function setup() {
 const BUTTON_SEL = 'ytd-watch-metadata #top-level-buttons-computed';
 const findBtn = (nodes) =>
   nodes.find((c) => c.tagName === 'BUTTON' && c._classes.has('ytdl-btn'));
+
+test('renderQualities 不使用 innerHTML，可在 Trusted Types 頁面正常渲染', async () => {
+  const { ui, body } = await setup();
+
+  // UI 建立後面板已掛進 body；依文件順序為 畫質 / 語言 / 並發數
+  const walk = (node, tag, acc = []) => {
+    node.children.forEach((c) => {
+      if (c.tagName === tag) acc.push(c);
+      walk(c, tag, acc);
+    });
+    return acc;
+  };
+  const selects = walk(body, 'SELECT');
+  assert.equal(selects.length, 3, '應有畫質、語言、並發數三個 select');
+  const [qualitySelect, langSelect] = selects;
+
+  // stub 的 innerHTML setter 會拋錯，這行能跑完就代表沒用到 innerHTML
+  ui.renderQualities(
+    [
+      { label: '1080p', container: 'mp4', sizeBytes: 1024, isProgressive: false },
+      { label: '720p', container: 'mp4', sizeBytes: 512, isProgressive: true },
+    ],
+    ['en', 'ja']
+  );
+
+  assert.equal(qualitySelect.children.length, 2, '畫質選項應被渲染');
+  assert.match(qualitySelect.children[0].textContent, /1080p/);
+  assert.match(qualitySelect.children[1].textContent, /含音訊/, '漸進式格式應標註含音訊');
+
+  assert.equal(langSelect.children.length, 3, '語言 = 自動 + en + ja');
+  assert.equal(langSelect.children[0].textContent, '自動（瀏覽器語言）');
+  assert.equal(langSelect.children[1].textContent, 'en');
+});
 
 test('容器尚未渲染時，按鈕以浮動方式顯示（不會靜默消失）', async () => {
   const { ui, body } = await setup();

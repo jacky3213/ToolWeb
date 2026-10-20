@@ -212,8 +212,8 @@
     "id": "youtube-direct-downloader",
     "name": "YouTube 直連下載 (Direct Downloader)",
     "packageName": "https://github.com/jacky3213",
-    "version": "v0.1.1",
-    "versionCode": 101,
+    "version": "v0.1.2",
+    "versionCode": 102,
     "minSdk": "Tampermonkey (Chrome/Edge 建議，高畫質合併需 File System Access API)",
     "architecture": "universal",
     "fileSize": "1075 KB",
@@ -222,6 +222,7 @@
     "summary": "在瀏覽器內直接下載 YouTube 影片與 Shorts，音視頻無損合併，不經第三方解析站",
     "description": "在 YouTube 影片與 Shorts 頁面一鍵下載：多客戶端直連串流、SABR/UMP 支援、畫質/容器/音軌語言選擇、瀏覽器內無損合併（不重新編碼）、Range 並發下載（1–8 路）、File System Access 串流寫盤、下載佇列與暫停/恢復/取消。僅供個人備份使用，請遵守著作權法與 YouTube 服務條款。",
     "changelog": [
+      "v0.1.2 修正畫質清單空白、面板顯示「取得格式失敗」——YouTube 啟用 Trusted Types 後 `innerHTML` 一律被拒（連清空也一樣），改用 replaceChildren()；順手移除 el() 未使用的 html 屬性",
       "v0.1.1 修正「安裝後完全看不到下載按鈕」——不再把按鈕注入 ytd-watch-metadata 本體（Polymer 首次渲染會清掉非自身子節點），改為只等 actions 列渲染完成後歸位，並加入每秒自我修復，Shorts 換片與 SPA 換頁後也會重新掛載",
       "v0.1.0 首次發布——直連 URL 與 SABR 雙路徑、無損合併、佇列管理"
     ],
@@ -229,7 +230,7 @@
     "scriptFileName": "youtube-direct-downloader.user.js",
     "rating": 5,
     "releaseDate": "2026-10-20",
-    "checksumSha256": "545ff9824f1d9eb3bfe51b3d0607f4eaf2f07811b00df1b81e9cac16b823b88e",
+    "checksumSha256": "6f50027dbc17468d145db3937642c3d89a1a5c7a1b7a0e3fae8659cda106a32c",
     "screenshots": [],
     "installGuide": {
       "steps": [

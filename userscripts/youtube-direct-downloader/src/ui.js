@@ -152,7 +152,9 @@ function el(tag, props = {}, children = []) {
   for (const [k, v] of Object.entries(props)) {
     if (k === 'class') node.className = v;
     else if (k === 'text') node.textContent = v;
-    else if (k === 'html') node.innerHTML = v;
+    // 注意：不支援 `html` 屬性。YouTube 啟用 Trusted Types
+    // （require-trusted-types-for 'script'），任何 innerHTML 指派都會丟
+    // TypeError 而中斷整個流程；內容一律走 textContent / appendChild。
     else if (k.startsWith('on') && typeof v === 'function') node.addEventListener(k.slice(2), v);
     else if (v !== undefined && v !== null) node.setAttribute(k, v);
   }
@@ -388,7 +390,9 @@ export function createUI({ onStart, onPause, onResume, onCancel, onRefresh, onSe
 
   // ---- 渲染畫質 / 語言 ----
   function renderQualities(qualities, languages) {
-    qualitySelect.innerHTML = '';
+    // 用 replaceChildren() 清空。`innerHTML = ''` 在 YouTube 的 Trusted Types
+    // 政策下會丟 TypeError（即使只是清空），導致整個格式清單渲染失敗。
+    qualitySelect.replaceChildren();
     if (!qualities || !qualities.length) {
       qualitySelect.appendChild(el('option', { value: '-1', text: '（無可用畫質）' }));
     } else {
@@ -405,7 +409,7 @@ export function createUI({ onStart, onPause, onResume, onCancel, onRefresh, onSe
     if (settings.qualityIndex >= qualities.length) settings.qualityIndex = 0;
     if (qualities.length) qualitySelect.value = String(settings.qualityIndex);
 
-    langSelect.innerHTML = '';
+    langSelect.replaceChildren();
     langSelect.appendChild(el('option', { value: 'auto', text: '自動（瀏覽器語言）' }));
     const langs = (languages || []).filter(Boolean);
     for (const l of langs) {
