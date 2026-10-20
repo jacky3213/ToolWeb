@@ -239,6 +239,7 @@ async function runSabrDownload({ quality, container, target, controls, onProgres
     pageFetch,
     decipher: (url) => decipherServerUrl(state.info, url),
     poToken: state.poToken ?? null,
+    onProgress,
   });
   controls.sabr = sabr;
   controls.cancel = () => { try { sabr.abort(); } catch {} };
@@ -247,7 +248,6 @@ async function runSabrDownload({ quality, container, target, controls, onProgres
   controls.resume = () => {};
 
   const { videoSource, audioSource } = sabr.toSources();
-  onProgress({ loaded: 0, total: 0, phase: 'muxing' });
 
   if (target.kind === 'fs') {
     await muxSources({ videoSource, audioSource, container, target: streamTargetFor(target.writable) });
