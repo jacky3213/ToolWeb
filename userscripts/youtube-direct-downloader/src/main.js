@@ -1,82 +1,19 @@
 // src/main.js
 //
-// 總裝配：安裝評估環境 → 攔截頁面請求 → 取得影片資訊與畫質清單 → 下載佇列 →
-// 直連 / SABR 雙路徑合併寫盤。
+// MSE 攔截式下載器總裝配。
 //
-// 注意：本檔案運行於 Tampermonkey 沙箱，依賴 unsafeWindow / GM_* 等全域，
-// 這些僅在瀏覽器運行期存在；node 靜態檢查時不會執行到取用處。
+// 流程：注入下載按鈕 → 使用者點「開始攔截下載」→ 建立 capture（攔 SourceBuffer）
+// → 建立 playbackDriver（16x 靜音跟播）→ 播放中即時回報進度 → 播完（ended）
+// → capture.stop() 拿 video/audio Blob → muxBlobs 合併 → 存檔。
+//
+// 注意：本檔案運行於 Tampermonkey 沙箱，依賴 unsafeWindow / document / window 等
+// 全域，這些僅在瀏覽器運行期存在；node 靜態檢查時不會執行到取用處。
 
-import { installEvalEnvironment, setClientProvider, decipherFormat, decipherServerUrl } from './decipher.js';
-import { getYouTubeClient, loadVideoInfo } from './yt-client.js';
-import { createDownloadTask } from './downloader.js';
-import { muxBlobs, muxSources, streamTargetFor, blobTarget } from './muxer.js';
+import { muxBlobs, streamTargetFor, blobTarget } from './muxer.js';
 import { openOutput, saveBlobAs } from './fs-writer.js';
-import { hasSabrStreaming, startSabrDownload } from './sabr.js';
-import { isGoogleVideoUrl, stripRangeParams, buildQualityList, pickAudioTrack } from './formats.js';
-import { gmFetch, pageFetch, mediaFetch } from './gm-bridge.js';
-import { getSetting, setSetting } from './settings.js';
+import { createCapture } from './capture.js';
+import { createPlaybackDriver } from './playback-driver.js';
 import { createUI } from './ui.js';
-
-// 1. 必須最先執行：替換 youtubei.js 的 eval 環境（在 Innertube.create 之前）
-installEvalEnvironment();
-
-// 2. 客戶端提供者：當 info 自身取不到 player 時，回退到 Innertube session 的 player
-setClientProvider(() => ensureClient().then((c) => c?.session?.player ?? null));
-
-// ---------- 全域狀態 ----------
-const state = {
-  videoId: null,
-  info: null,
-  qualities: [],
-  languages: [],
-  audioFormats: [],
-  poToken: null,
-  settingsLanguage: 'auto',
-};
-
-let clientPromise = null;
-function ensureClient() {
-  if (!clientPromise) {
-    clientPromise = getYouTubeClient(gmFetch, { cookie: getSetting('cookie', '') })
-      .then((session) => {
-        // poToken 取自 Innertube session（供 SABR 使用）
-        state.poToken = session?.session?.po_token ?? null;
-        return session;
-      })
-      .catch((err) => {
-        clientPromise = null;
-        throw err;
-      });
-  }
-  return clientPromise;
-}
-
-// ---------- 頁面攔截 ----------
-const pageCapture = { playerResponse: null };
-const capturedVideoplayback = new Map(); // 經 stripRangeParams 後的 googlevideo URL -> 擷取時間
-
-function installFetchOverride() {
-  if (typeof unsafeWindow === 'undefined' || typeof unsafeWindow.fetch !== 'function') return;
-  const orig = unsafeWindow.fetch.bind(unsafeWindow);
-  unsafeWindow.fetch = (input, init) => {
-    const url = typeof input === 'string' ? input : (input && input.url) || '';
-    return orig(input, init).then(async (res) => {
-      try {
-        if (isGoogleVideoUrl(url)) {
-          capturedVideoplayback.set(stripRangeParams(url), Date.now());
-        }
-        if (url.includes('/youtubei/v1/player')) {
-          // 複製回應以讀取 JSON，不影響頁面/其他讀取方對原回應的消費
-          const cloned = res.clone();
-          cloned.json().then((data) => {
-            if (data) pageCapture.playerResponse = data;
-          }).catch(() => {});
-        }
-      } catch { /* 攔截不得干擾原請求 */ }
-      return res;
-    });
-  };
-}
 
 // ---------- 影片 id / 檔名 ----------
 function parseVideoId() {
@@ -101,296 +38,150 @@ function sanitizeFilename(name) {
 }
 
 function videoTitle() {
-  // 查證：youtubei.js VideoInfo 的標題位於 basic_info.title（MediaInfo.d.ts:45）。
-  // info.video_details 並非 VideoInfo 實例屬性（僅在原始 player response 上），
-  // 故回退直接取 videoId。
-  const info = state.info;
-  const t = info?.basic_info?.title ?? info?.video_details?.title ?? null;
-  return sanitizeFilename(t ?? state.videoId ?? 'video');
+  // 標題優先取頁面 <title>（去掉「 - YouTube」後綴），取不到退回 videoId。
+  const t = document.title.replace(/\s*-\s*YouTube\s*$/i, '').trim();
+  return sanitizeFilename(t || state.videoId || 'video');
 }
 
-// ---------- 刷新畫質清單 ----------
-async function refreshFormats() {
-  if (!state.videoId) {
-    ui.setError('尚未偵測到影片，請在影片頁面操作。');
+// ---------- 全域狀態 ----------
+const state = {
+  videoId: null,
+  capturing: false,
+};
+
+// ---------- 攔截下載流程 ----------
+let capture = null;
+let driver = null;
+
+// 進度回報：以「已攔截 MB」為主（攔截下載的本質是抓資料量，不是播放秒數）。
+function reportCaptureProgress() {
+  if (!capture) return;
+  const { meta } = capture.getResult();
+  const loaded = (meta.videoBytes || 0) + (meta.audioBytes || 0);
+  ui.setProgress({ loaded, total: 0 });
+  ui.setStatus(
+    `攔截中… 視訊 ${((meta.videoBytes || 0) / 1024 / 1024).toFixed(1)} MB · 音訊 ${((meta.audioBytes || 0) / 1024 / 1024).toFixed(1)} MB`
+  );
+}
+
+async function startCaptureDownload() {
+  if (state.capturing) return;
+  state.capturing = true;
+
+  ui.setError(null);
+  ui.setStatus('準備攔截…');
+  ui.setTaskButtons(true);
+
+  // 1. 建立 capture 並開始攔截（攔 SourceBuffer）
+  capture = createCapture();
+  capture.start();
+
+  // 2. 建立播放驅動：16x 靜音跟播
+  driver = createPlaybackDriver({
+    onProgress: () => {
+      reportCaptureProgress();
+    },
+    onComplete: async () => {
+      await finishCaptureDownload();
+    },
+    onError: (err) => {
+      console.error('[YT-DL] 播放錯誤', err);
+      ui.setError(err);
+      ui.setStatus('播放錯誤');
+      resetCapture();
+    },
+  });
+
+  ui.setStatus('開始 16x 靜音加速播放…');
+  await driver.start();
+}
+
+async function finishCaptureDownload() {
+  if (!capture) return;
+  const { video, audio } = capture.stop();
+  resetCapture();
+
+  if (!video) {
+    ui.setError('未攔截到視訊分片。請確認影片已實際播放。');
+    ui.setStatus('攔截失敗');
+    ui.setTaskButtons(false);
     return;
   }
-  ui.setStatus('正在取得格式…');
-  ui.setError(null);
-  try {
-    await ensureClient();
-    const { source, info } = await loadVideoInfo(state.videoId, gmFetch, pageCapture.playerResponse);
-    state.info = info;
 
-    const sd = info?.streaming_data ?? {};
-    const formats = [...(sd.formats ?? []), ...(sd.adaptive_formats ?? [])];
-    const audioFormats = formats.filter((f) => f.has_audio && !f.has_video);
-    state.audioFormats = audioFormats;
+  ui.setStatus('拼檔中…');
 
-    const qualities = buildQualityList(formats, { audioLanguage: navigator.language });
-    state.qualities = qualities;
+  // 3. 輸出統一 mp4（video 是 mp4，audio 是 webm，mediabunny 跨容器合併）
+  const container = 'mp4';
+  const filename = `${videoTitle()}.${container}`;
 
-    const languages = [];
-    for (const f of audioFormats) {
-      if (f.language && !languages.includes(f.language)) languages.push(f.language);
-    }
-    state.languages = languages;
-
-    ui.renderQualities(qualities, languages);
-    ui.setStatus(`格式已取得（來源：${source}）`);
-  } catch (err) {
-    console.error('[YT-DL] 取得格式失敗', err);
-    ui.setError(err);
-    ui.setStatus('取得格式失敗');
-  }
-}
-
-// ---------- 下載執行 ----------
-let currentTask = null; // { controls }
-
-// 合併進度回報：多分片 / 多串流累加
-function makeProgressAggregator(onProgress) {
-  const counters = [];
-  return {
-    add() {
-      const c = { loaded: 0, total: 0 };
-      counters.push(c);
-      return (loaded, total) => {
-        c.loaded = loaded;
-        if (total) c.total = total;
-        let l = 0, t = 0;
-        for (const x of counters) { l += x.loaded; t += x.total; }
-        onProgress({ loaded: l, total: t });
-      };
-    },
-  };
-}
-
-// 路徑 A：直連 URL（format 有 url / cipher / signature_cipher）
-async function runDirectDownload({ quality, container, target, concurrency, controls, onProgress }) {
-  const videoFormat = quality.videoFormat;
-  const audioFormat = quality.audioFormat;
-
-  // 依選定語言重新挑選音軌（auto 時沿用 quality 已選定的 audioFormat）
-  let audio = audioFormat;
-  const lang = state.settingsLanguage;
-  if (lang && lang !== 'auto' && !quality.isProgressive) {
-    const picked = pickAudioTrack(state.audioFormats, lang);
-    if (picked) audio = picked;
-  }
-
-  const streams = [];
-  streams.push({ format: videoFormat, isAudio: false });
-  if (audio) streams.push({ format: audio, isAudio: true });
-
-  const agg = makeProgressAggregator(onProgress);
-  const tasks = [];
-  const started = [];
-
-  for (const s of streams) {
-    const url = await decipherFormat(state.info, s.format);
-    const total = Number(s.format.content_length) || 0;
-    const report = agg.add();
-
-    if (total > 0) {
-      const task = createDownloadTask({
-        url,
-        totalSize: total,
-        fetchImpl: mediaFetch,
-        concurrency,
-        onProgress: ({ loaded, total: t }) => report(loaded, t),
-      });
-      tasks.push(task);
-      started.push(task.start());
-    } else {
-      // 無 content_length：整段以單次請求下載（不切分片，無法續傳）
-      const res = await mediaFetch(url);
-      const buf = new Uint8Array(await res.arrayBuffer());
-      report(buf.length, buf.length);
-      const fake = {
-        start: async () => ({ buffer: buf, blob: () => new Blob([buf]) }),
-        pause() {}, resume() {}, cancel() {},
-      };
-      tasks.push(fake);
-      started.push(fake.start());
-    }
-  }
-  controls.tasks = tasks;
-
-  const results = await Promise.all(started);
-  const videoBlob = results[0].blob();
-  const audioBlob = audio ? results[1].blob() : null;
-
-  if (target.kind === 'fs') {
-    await muxBlobs({ videoBlob, audioBlob, container, target: streamTargetFor(target.writable) });
-  } else {
-    const bt = blobTarget();
-    await muxBlobs({ videoBlob, audioBlob, container, target: bt });
-    saveBlobAs(new Blob([bt.buffer]), target.suggestedName);
-  }
-}
-
-// 路徑 B：SABR / UMP 串流（無直連 URL，但有 server_abr_streaming_url）
-async function runSabrDownload({ quality, container, target, controls, onProgress }) {
-  const sabr = await startSabrDownload({
-    info: state.info,
-    videoFormat: quality.videoFormat,
-    audioFormat: quality.audioFormat,
-    pageFetch,
-    decipher: (url) => decipherServerUrl(state.info, url),
-    poToken: state.poToken ?? null,
-    onProgress,
-  });
-  controls.sabr = sabr;
-  controls.cancel = () => { try { sabr.abort(); } catch {} };
-  // SABR 為連續串流，暫停難以精確中斷，這裡僅支援取消；pause/resume 為空操作。
-  controls.pause = () => {};
-  controls.resume = () => {};
-
-  const { videoSource, audioSource } = sabr.toSources();
-
-  if (target.kind === 'fs') {
-    await muxSources({ videoSource, audioSource, container, target: streamTargetFor(target.writable) });
-  } else {
-    const bt = blobTarget();
-    await muxSources({ videoSource, audioSource, container, target: bt });
-    saveBlobAs(new Blob([bt.buffer]), target.suggestedName);
-  }
-}
-
-async function runDownloadTask(job) {
-  const { qualityIndex, language, concurrency } = job;
-  const quality = state.qualities[qualityIndex];
-  if (!quality) throw new Error('所選畫質不存在，請重新整理格式。');
-
-  state.settingsLanguage = language;
-  const container = quality.container;
-  const filename = `${videoTitle()} [${quality.label}].${container}`;
-
-  // 開啟寫盤目標（使用者取消存檔對話框會拋 AbortError）
   let target;
   try {
     target = await openOutput(filename, container);
   } catch (err) {
     if (err && err.name === 'AbortError') {
       ui.setStatus('已取消儲存');
+      ui.setTaskButtons(false);
       return;
     }
     throw err;
   }
 
-  const controls = {
-    tasks: [],
-    pause() { controls.tasks.forEach((t) => t.pause && t.pause()); },
-    resume() { controls.tasks.forEach((t) => t.resume && t.resume()); },
-    cancel() { controls.tasks.forEach((t) => t.cancel && t.cancel()); },
-  };
-  currentTask = { controls };
-
-  ui.setTaskButtons(true);
-  ui.setError(null);
-  ui.setStatus('開始下載…');
-
   try {
-    const onProgress = (p) => ui.setProgress(p);
-
-    const videoFormat = quality.videoFormat;
-    const hasDirect = Boolean(videoFormat?.url || videoFormat?.cipher || videoFormat?.signature_cipher);
-
-    if (hasDirect) {
-      await runDirectDownload({ quality, container, target, concurrency, controls, onProgress });
-    } else if (hasSabrStreaming(state.info)) {
-      await runSabrDownload({ quality, container, target, controls, onProgress });
+    if (target.kind === 'fs') {
+      await muxBlobs({ videoBlob: video, audioBlob: audio, container, target: streamTargetFor(target.writable) });
     } else {
-      throw new Error('此畫質沒有可用直連 URL，也非 SABR 影片。建議更換畫質或重新整理格式（右上角「刷新格式」）。');
+      const bt = blobTarget();
+      await muxBlobs({ videoBlob: video, audioBlob: audio, container, target: bt });
+      saveBlobAs(new Blob([bt.buffer]), target.suggestedName);
     }
-
     ui.setProgress({ loaded: 1, total: 1 });
     ui.setStatus('下載完成 ✅');
+  } catch (err) {
+    console.error('[YT-DL] 合併失敗', err);
+    ui.setError(err);
+    ui.setStatus('合併失敗');
   } finally {
-    // 錯誤/取消路徑：mediabunny 不會觸及 FS writable，必須自行關閉，
-    // 否則磁碟上留下 0 位元組或半成品檔案且 handle 洩漏。
-    // 成功路徑 mediabunny 已關閉，這裡重複關閉會拋錯但被吞掉，屬安全。
     if (target?.kind === 'fs' && target.writable) {
       try { await target.writable.close(); } catch { /* 已關閉 */ }
     }
     ui.setTaskButtons(false);
-    currentTask = null;
   }
 }
 
-// ---------- 佇列：一次跑一個 ----------
-const queue = [];
-let running = false;
-
-function enqueue(job) {
-  queue.push(job);
-  runNext();
-}
-
-async function runNext() {
-  if (running) return;
-  const job = queue.shift();
-  if (!job) return;
-  running = true;
-  try {
-    await runDownloadTask(job);
-  } catch (err) {
-    if (err && err.name === 'AbortError') {
-      ui.setError(null);
-      ui.setStatus('已取消下載');
-    } else {
-      console.error('[YT-DL] 下載失敗', err);
-      ui.setError(err);
-      ui.setStatus('下載失敗');
-    }
-  } finally {
-    running = false;
-    runNext();
+function resetCapture() {
+  capture = null;
+  if (driver) {
+    driver.cancel();
+    driver = null;
   }
+  state.capturing = false;
 }
 
-function startDownload({ qualityIndex, language, concurrency }) {
-  enqueue({ qualityIndex, language, concurrency });
+function cancelCaptureDownload() {
+  if (!state.capturing) return;
+  resetCapture();
+  ui.setStatus('已取消攔截下載');
+  ui.setError(null);
+  ui.setTaskButtons(false);
 }
 
-// ---------- UI 回呼 ----------
-function handlePause() { currentTask?.controls?.pause && currentTask.controls.pause(); }
-function handleResume() { currentTask?.controls?.resume && currentTask.controls.resume(); }
-function handleCancel() { currentTask?.controls?.cancel && currentTask.controls.cancel(); }
-
+// ---------- UI ----------
 const ui = createUI({
-  onStart: (qualityIndex, language, concurrency) => {
-    startDownload({ qualityIndex, language, concurrency });
-  },
-  onPause: handlePause,
-  onResume: handleResume,
-  onCancel: handleCancel,
-  onRefresh: () => { refreshFormats(); },
-  onSettingsChange: (s) => { /* 已由 ui 透過 settings.js 持久化，這裡可留作擴充 */ },
+  onStart: () => { startCaptureDownload(); },
+  onCancel: () => { cancelCaptureDownload(); },
 });
 
 // ---------- 導航 / 開機 ----------
 function onNavigate() {
-  // yt-navigate-finish 後再延遲抓一次內嵌 player response（SPA 可能尚未填好）
-  setTimeout(() => {
-    try {
-      if (unsafeWindow.ytInitialPlayerResponse) {
-        pageCapture.playerResponse = unsafeWindow.ytInitialPlayerResponse;
-      }
-    } catch {}
-  }, 500);
-
   state.videoId = parseVideoId();
   ui.ensureButton();
-  if (state.videoId) {
-    refreshFormats();
-  } else {
+  if (!state.videoId) {
     ui.setStatus('此頁面非影片頁，無法下載。');
+  } else {
+    ui.setStatus('');
   }
 }
 
-installFetchOverride();
 window.addEventListener('yt-navigate-finish', onNavigate);
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', onNavigate);
@@ -398,4 +189,4 @@ if (document.readyState === 'loading') {
   onNavigate();
 }
 
-console.log('[YT-DL] youtube-direct-downloader ready');
+console.log('[YT-DL] youtube-direct-downloader ready (MSE capture mode)');

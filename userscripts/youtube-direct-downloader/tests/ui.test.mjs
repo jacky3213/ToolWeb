@@ -108,11 +108,7 @@ async function setup() {
 
   const ui = createUI({
     onStart: () => {},
-    onPause: () => {},
-    onResume: () => {},
     onCancel: () => {},
-    onRefresh: () => {},
-    onSettingsChange: () => {},
   });
 
   return { ui, body, selectors };
@@ -122,10 +118,10 @@ const BUTTON_SEL = 'ytd-watch-metadata #top-level-buttons-computed';
 const findBtn = (nodes) =>
   nodes.find((c) => c.tagName === 'BUTTON' && c._classes.has('ytdl-btn'));
 
-test('renderQualities 不使用 innerHTML，可在 Trusted Types 頁面正常渲染', async () => {
+test('攔截式下載 UI 不使用 innerHTML 且無畫質/語言/並發選單', async () => {
   const { ui, body } = await setup();
 
-  // UI 建立後面板已掛進 body；依文件順序為 畫質 / 語言 / 並發數
+  // 遍歷找 SELECT 與 BUTTON
   const walk = (node, tag, acc = []) => {
     node.children.forEach((c) => {
       if (c.tagName === tag) acc.push(c);
@@ -133,26 +129,17 @@ test('renderQualities 不使用 innerHTML，可在 Trusted Types 頁面正常渲
     });
     return acc;
   };
+
+  // 攔截式下載不需要畫質/語言/並發選單 → 面板內不應有任何 SELECT
   const selects = walk(body, 'SELECT');
-  assert.equal(selects.length, 3, '應有畫質、語言、並發數三個 select');
-  const [qualitySelect, langSelect] = selects;
+  assert.equal(selects.length, 0, '攔截式 UI 不應有畫質/語言/並發 select');
 
-  // stub 的 innerHTML setter 會拋錯，這行能跑完就代表沒用到 innerHTML
-  ui.renderQualities(
-    [
-      { label: '1080p', container: 'mp4', sizeBytes: 1024, isProgressive: false },
-      { label: '720p', container: 'mp4', sizeBytes: 512, isProgressive: true },
-    ],
-    ['en', 'ja']
-  );
-
-  assert.equal(qualitySelect.children.length, 2, '畫質選項應被渲染');
-  assert.match(qualitySelect.children[0].textContent, /1080p/);
-  assert.match(qualitySelect.children[1].textContent, /含音訊/, '漸進式格式應標註含音訊');
-
-  assert.equal(langSelect.children.length, 3, '語言 = 自動 + en + ja');
-  assert.equal(langSelect.children[0].textContent, '自動（瀏覽器語言）');
-  assert.equal(langSelect.children[1].textContent, 'en');
+  // 應有「開始攔截下載」與「取消」兩個按鈕
+  const buttons = walk(body, 'BUTTON');
+  const startBtn = buttons.find((b) => b.textContent === '開始攔截下載');
+  const cancelBtn = buttons.find((b) => b.textContent === '取消');
+  assert.ok(startBtn, '應有「開始攔截下載」按鈕');
+  assert.ok(cancelBtn, '應有「取消」按鈕');
 });
 
 test('容器尚未渲染時，按鈕以浮動方式顯示（不會靜默消失）', async () => {

@@ -1,14 +1,9 @@
 // src/ui.js
 //
 // 完整 Tampermonkey 注入式 UI：下載按鈕 + 右下角浮動面板。
-// 依賴：style 注入、quality/lang/concurrency 三個 select、進度條、狀態/錯誤區、
-// 暫停/恢復/取消/刷新/開始 控制項。所有樣式以 YouTube 的 `--yt-spec-*` CSS 變數
-// 為基礎，自動跟隨深淺色主題。
-//
-// 持久化透過 settings.js（GM_setValue/GM_getValue），同時在控制項變動時呼叫
-// onSettingsChange 讓 main 同步運行期設定。
+// 攔截式下載 UI：進度條、狀態/錯誤區、開始/取消控制項。
+// 所有樣式以 YouTube 的 `--yt-spec-*` CSS 變數為基礎，自動跟隨深淺色主題。
 
-import { getSetting, setSetting } from './settings.js';
 import { formatBytes } from './range-split.js';
 
 const STYLE_ID = 'ytdl-style';
@@ -175,104 +170,37 @@ function el(tag, props = {}, children = []) {
  * @param {Function} callbacks.onRefresh () => void
  * @param {Function} callbacks.onSettingsChange (settings) => void
  */
-export function createUI({ onStart, onPause, onResume, onCancel, onRefresh, onSettingsChange }) {
+export function createUI({ onStart, onCancel }) {
   injectStyle();
 
   let buttonEl = null;
   let panelEl = null;
-  let paused = false;
   let taskActive = false;
 
-  // 暫存目前控制項選擇，便於 onSettingsChange / 預設回填
-  const settings = {
-    concurrency: Number(getSetting('concurrency', 4)) || 4,
-    qualityIndex: Number(getSetting('qualityIndex', 0)) || 0,
-    language: String(getSetting('language', 'auto')),
-  };
-
   // ---- 面板骨架 ----
-  const qualitySelect = el('select', { id: 'ytdl-quality', class: 'ytdl-select' });
-  const langSelect = el('select', { id: 'ytdl-lang', class: 'ytdl-select' });
-  const concSelect = el('select', { id: 'ytdl-concurrency', class: 'ytdl-select' });
-  for (let i = 1; i <= 8; i++) {
-    concSelect.appendChild(el('option', { value: String(i), text: String(i) }));
-  }
-  concSelect.value = String(settings.concurrency);
-
   const bar = el('div', { class: 'ytdl-bar' });
   const progressText = el('div', { class: 'ytdl-progress-text', text: '尚未開始' });
   const statusEl = el('div', { class: 'ytdl-status', text: '' });
   const errorEl = el('div', { class: 'ytdl-error', hidden: true });
 
-  const btnToggle = el('button', { class: 'ytdl-pause', text: '暫停', disabled: true });
   const btnCancel = el('button', { class: 'ytdl-cancel', text: '取消', disabled: true });
-  const btnRefresh = el('button', { class: 'ytdl-refresh', text: '刷新格式' });
-  const btnStart = el('button', { class: 'ytdl-start', text: '開始下載' });
-
-  // 單一「暫停/恢復」切換按鈕：文字在 暫停 ↔ 恢復 間切換
-  function togglePause() {
-    if (!taskActive) return;
-    if (!paused) {
-      paused = true;
-      btnToggle.textContent = '恢復';
-      onPause && onPause();
-    } else {
-      paused = false;
-      btnToggle.textContent = '暫停';
-      onResume && onResume();
-    }
-  }
-  btnToggle.addEventListener('click', togglePause);
+  const btnStart = el('button', { class: 'ytdl-start', text: '開始攔截下載' });
 
   btnCancel.addEventListener('click', () => { onCancel && onCancel(); });
-  btnRefresh.addEventListener('click', () => { onRefresh && onRefresh(); });
   btnStart.addEventListener('click', () => {
     if (!taskActive) {
-      onStart && onStart(
-        Number(qualitySelect.value),
-        langSelect.value,
-        Number(concSelect.value)
-      );
+      onStart && onStart();
     }
-  });
-
-  // 控制項變動 → 持久化 + 通知 main
-  function emitSettings() {
-    setSetting('concurrency', settings.concurrency);
-    setSetting('qualityIndex', settings.qualityIndex);
-    setSetting('language', settings.language);
-    onSettingsChange && onSettingsChange({ ...settings });
-  }
-  qualitySelect.addEventListener('change', () => {
-    settings.qualityIndex = Number(qualitySelect.value);
-    emitSettings();
-  });
-  langSelect.addEventListener('change', () => {
-    settings.language = langSelect.value;
-    emitSettings();
-  });
-  concSelect.addEventListener('change', () => {
-    settings.concurrency = Number(concSelect.value);
-    emitSettings();
   });
 
   const panel = el('div', { class: 'ytdl-panel ytdl-style-base', hidden: true, id: 'ytdl-panel' }, [
     el('div', { class: 'ytdl-head' }, [
-      el('span', { text: 'YouTube 直連下載' }),
+      el('span', { text: 'YouTube 攔截下載' }),
       el('button', { class: 'ytdl-close', text: '×', title: '關閉' , onclick: () => { panel.hidden = true; } }),
     ]),
     el('div', { class: 'ytdl-body' }, [
       el('div', { class: 'ytdl-row' }, [
-        el('label', { text: '畫質' }),
-        qualitySelect,
-      ]),
-      el('div', { class: 'ytdl-row' }, [
-        el('label', { text: '音軌語言' }),
-        langSelect,
-      ]),
-      el('div', { class: 'ytdl-row' }, [
-        el('label', { text: '並發數（分片下載）' }),
-        concSelect,
+        el('label', { text: '提示：會以 16x 靜音加速播放，從頭播到尾以攔截完整高畫質分片。請保持分頁在前景。' }),
       ]),
       el('div', { class: 'ytdl-progress-wrap' }, [
         el('div', { class: 'ytdl-progress' }, [bar]),
@@ -281,7 +209,7 @@ export function createUI({ onStart, onPause, onResume, onCancel, onRefresh, onSe
       statusEl,
       errorEl,
       el('div', { class: 'ytdl-actions' }, [
-        btnToggle, btnCancel, btnRefresh, btnStart,
+        btnCancel, btnStart,
       ]),
     ]),
   ]);
@@ -404,35 +332,8 @@ export function createUI({ onStart, onPause, onResume, onCancel, onRefresh, onSe
   }
 
   // ---- 渲染畫質 / 語言 ----
-  function renderQualities(qualities, languages) {
-    // 用 replaceChildren() 清空。`innerHTML = ''` 在 YouTube 的 Trusted Types
-    // 政策下會丟 TypeError（即使只是清空），導致整個格式清單渲染失敗。
-    qualitySelect.replaceChildren();
-    if (!qualities || !qualities.length) {
-      qualitySelect.appendChild(el('option', { value: '-1', text: '（無可用畫質）' }));
-    } else {
-      for (let i = 0; i < qualities.length; i++) {
-        const q = qualities[i];
-        const size = q.sizeBytes != null ? ` · ${formatBytes(q.sizeBytes)}` : '';
-        const prog = q.isProgressive ? ' · 含音訊' : '';
-        qualitySelect.appendChild(
-          el('option', { value: String(i), text: `${q.label} · ${q.container}${size}${prog}` })
-        );
-      }
-    }
-    // 選擇範圍保護：若之前存的大於現有數量，退回 0
-    if (settings.qualityIndex >= qualities.length) settings.qualityIndex = 0;
-    if (qualities.length) qualitySelect.value = String(settings.qualityIndex);
-
-    langSelect.replaceChildren();
-    langSelect.appendChild(el('option', { value: 'auto', text: '自動（瀏覽器語言）' }));
-    const langs = (languages || []).filter(Boolean);
-    for (const l of langs) {
-      langSelect.appendChild(el('option', { value: l, text: l }));
-    }
-    if (langs.includes(settings.language)) langSelect.value = settings.language;
-    else langSelect.value = 'auto';
-  }
+  // 註：攔截式下載不需要畫質/語言選單（攔的是播放器當前畫質），
+  // 故 renderQualities 已移除。進度改用「已攔截 MB」呈現（見 setProgress）。
 
   function setStatus(text) {
     statusEl.textContent = text || '';
@@ -464,13 +365,6 @@ export function createUI({ onStart, onPause, onResume, onCancel, onRefresh, onSe
     taskActive = active;
     btnStart.disabled = active;
     btnCancel.disabled = !active;
-    if (active) {
-      paused = false;
-      btnToggle.disabled = false;
-      btnToggle.textContent = '暫停';
-    } else {
-      btnToggle.disabled = true;
-    }
   }
 
   // 開機即啟動看門狗：即使 main 的 onNavigate 沒被觸發（SPA 事件時序、
@@ -479,7 +373,6 @@ export function createUI({ onStart, onPause, onResume, onCancel, onRefresh, onSe
 
   return {
     ensureButton,
-    renderQualities,
     setStatus,
     setError,
     setProgress,
