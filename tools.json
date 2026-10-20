@@ -207,5 +207,51 @@
     },
     "isOfficial": true,
     "isFeatured": false
+  },
+  {
+    "id": "youtube-direct-downloader",
+    "name": "YouTube 直連下載 (Direct Downloader)",
+    "packageName": "https://github.com/jacky3213",
+    "version": "v0.1.0",
+    "versionCode": 100,
+    "minSdk": "Tampermonkey (Chrome/Edge 建議，高畫質合併需 File System Access API)",
+    "architecture": "universal",
+    "fileSize": "1074 KB",
+    "icon": "Terminal",
+    "category": "Tampermonkey",
+    "summary": "在瀏覽器內直接下載 YouTube 影片與 Shorts，音視頻無損合併，不經第三方解析站",
+    "description": "在 YouTube 影片與 Shorts 頁面一鍵下載：多客戶端直連串流、SABR/UMP 支援、畫質/容器/音軌語言選擇、瀏覽器內無損合併（不重新編碼）、Range 並發下載（1–8 路）、File System Access 串流寫盤、下載佇列與暫停/恢復/取消。僅供個人備份使用，請遵守著作權法與 YouTube 服務條款。",
+    "changelog": [
+      "v0.1.0 首次發布——直連 URL 與 SABR 雙路徑、無損合併、佇列管理"
+    ],
+    "downloadUrl": "/api/download/youtube-direct-downloader.user.js",
+    "scriptFileName": "youtube-direct-downloader.user.js",
+    "rating": 5,
+    "releaseDate": "2026-10-20",
+    "checksumSha256": "709cfe54d784708e17fe3d81a3dcfb1543589c36636f8ddf0829d7f4378cb48b",
+    "screenshots": [],
+    "installGuide": {
+      "steps": [
+        "安裝瀏覽器擴充 Tampermonkey（建議 Chrome / Edge，高畫質合併需 File System Access API）",
+        "點擊「立即安裝腳本 (.user.js)」，Tampermonkey 會自動跳出安裝頁，按「安裝」",
+        "打開 YouTube 影片頁或 Shorts 頁（youtube.com/watch、youtube.com/shorts），播放器旁出現「⬇ 下載」按鈕即安裝成功",
+        "點擊「⬇ 下載」選擇畫質 / 容器 / 音軌語言，開始下載；可於佇列面板暫停 / 恢復 / 取消"
+      ],
+      "verify": "開啟 YouTube 頁面後按 F12 → Console 面板，應看到 [YT-DL] 的日誌輸出。若格式清單只出現 360p，請先在播放器選高畫質播放幾秒，再重新整理頁面讓腳本重新抓取可用格式。",
+      "troubleshooting": {
+        "title": "安裝後影片頁沒有出現「⬇ 下載」按鈕？",
+        "steps": [
+          "確認腳本已啟用：Tampermonkey 圖示 → Manage Dashboard → 找到 YouTube Direct Downloader → 確認開關為綠色",
+          "開啟 Chrome／Edge，網址列輸入 chrome://extensions（Edge 為 edge://extensions）",
+          "找到 Tampermonkey，點「詳細資料」",
+          "找到「允許使用者指令碼」（Allow User Scripts）開關 → 打開",
+          "確認網址是 youtube.com 網域（含 www. 與 m.），其他網域不會執行",
+          "重新整理影片頁，播放器旁應出現「⬇ 下載」按鈕"
+        ],
+        "note": "說明：本腳本只支援一般影片與 Shorts，不支援 DRM 加密內容（如 YouTube Premium 電影 / 付費內容）與現場直播（Live），這類內容無法取得直連串流。Firefox 缺少 File System Access API，大檔會退回記憶體內合併，受限於可用記憶體，建議以 Chrome / Edge 下載高畫質大檔。本工具僅供個人備份使用，請遵守著作權法與 YouTube 服務條款。"
+      }
+    },
+    "isOfficial": true,
+    "isFeatured": false
   }
 ]
