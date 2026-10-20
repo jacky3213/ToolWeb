@@ -12,7 +12,15 @@
 import { SabrStream } from 'googlevideo/sabr-stream';
 import { ReadableStreamSource } from 'mediabunny';
 import { Constants } from 'youtubei.js/web';
+import { Logger, LogLevel } from 'googlevideo/utils';
 import { isGoogleVideoUrl, toLastModified } from './formats.js';
+
+// 開啟 googlevideo 的 debug 日誌，讓「分片為何被丟」的內部訊息（如
+// Content length mismatch、No initialized format found）直接印到 console。
+// 這是排查 SABR stall 的關鍵；確認根因後應移除或降回預設。
+try {
+  Logger.getInstance().setLogLevels(LogLevel.ALL);
+} catch { /* Logger 匯出路徑變更時不影響主流程 */ }
 
 // SABR 分片請求診斷包裝：記錄每個 UMP 請求的 HTTP 狀態、content-type、回應大小。
 // 目的：當串流 stall 時，能立刻分辨是「伺服器回傳空／錯誤」還是「資料有到但
