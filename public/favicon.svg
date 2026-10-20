@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgA" x1="0" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#0c1424"/>
+      <stop offset="0.5" stop-color="#06070d"/>
+      <stop offset="1" stop-color="#020203"/>
+    </linearGradient>
+    <linearGradient id="jA" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#d9fdff"/>
+      <stop offset="0.28" stop-color="#22d3ee"/>
+      <stop offset="0.7" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#6366f1"/>
+    </linearGradient>
+    <linearGradient id="rimA" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#22d3ee" stop-opacity="0.55"/>
+      <stop offset="0.55" stop-color="#22d3ee" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#6366f1" stop-opacity="0.28"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="116" fill="url(#bgA)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="114.5" fill="none" stroke="url(#rimA)" stroke-width="3"/>
+  <circle cx="256" cy="262" r="190" fill="#22d3ee" opacity="0.05"/>
+
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M332 136 V 300 A 76 76 0 0 1 180 300" stroke="#22d3ee" stroke-width="132" opacity="0.07"/>
+    <path d="M332 136 V 300 A 76 76 0 0 1 180 300" stroke="#22d3ee" stroke-width="104" opacity="0.10"/>
+    <path d="M332 136 V 300 A 76 76 0 0 1 180 300" stroke="url(#jA)" stroke-width="76"/>
+    <path d="M332 136 V 300 A 76 76 0 0 1 180 300" stroke="#ffffff" stroke-width="15" opacity="0.40"/>
+  </g>
+
+  <circle cx="372" cy="128" r="22" fill="#22d3ee" opacity="0.16"/>
+  <circle cx="372" cy="128" r="11" fill="#22d3ee"/>
+  <circle cx="372" cy="128" r="4.5" fill="#ffffff" opacity="0.9"/>
+</svg>
