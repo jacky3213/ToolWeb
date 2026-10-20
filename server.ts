@@ -232,6 +232,48 @@ async function fetchDownloadCountsFromGoogleSheet(): Promise<Record<string, numb
   }
 }
 
+// 下載統計以 Google Sheet 為唯一事實來源。
+// 5 分鐘 TTL 快取：避免每次請求都全量抓取 CSV（流量隨下載量線性成長）。
+const SHEET_CACHE_TTL_MS = 5 * 60 * 1000;
+let sheetCountsCache: Record<string, number> | null = null;
+let sheetCountsFetchedAt = 0;
+
+async function getDownloadCountsFromSheet(): Promise<Record<string, number>> {
+  const now = Date.now();
+  if (sheetCountsCache !== null && now - sheetCountsFetchedAt < SHEET_CACHE_TTL_MS) {
+    return sheetCountsCache;
+  }
+  const counts = await fetchDownloadCountsFromGoogleSheet();
+  sheetCountsCache = counts;
+  sheetCountsFetchedAt = now;
+  return counts;
+}
+
+/**
+ * 以 Sheet 統計更新每個工具的下載數。
+ *
+ * **單調不減：** 取 Sheet 值與當前值的較大者。
+ * 下載點擊時前端（src/App.tsx:84）與後端都會即時 +1，讓使用者立刻看到數字變化；
+ * 但 Google Form 寫入 Sheet 有延遲，若直接覆寫會讓數字「先跳上去再掉回來」。
+ * 下載次數是累計值，顯示上不應該倒退。
+ *
+ * 這與 Drive 同步裡被移除的 Math.max(sheetCount, memoryDelta) 語意不同：
+ * 舊的是「從兩個不可靠來源猜測重建數字」，新的是「累計值不得倒退」。
+ *
+ * 代價：若 Google Form 提交永久失敗，顯示值會略高於 Sheet 真實值，直到伺服器重啟才校正。
+ */
+async function refreshDownloadCounts(): Promise<void> {
+  try {
+    const counts = await getDownloadCountsFromSheet();
+    for (const tool of apkToolsStore) {
+      const sheetCount = counts[tool.id] || 0;
+      tool.downloadCount = Math.max(sheetCount, tool.downloadCount || 0);
+    }
+  } catch (err: any) {
+    console.error("[Stats] 無法更新下載統計，沿用上一輪數值:", err?.message || err);
+  }
+}
+
 let lastDriveSyncTime = 0;
 let isSyncingDrive = false;
 
@@ -1247,6 +1289,15 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  // 下載統計排程：開機立即取一次，之後每 5 分鐘更新。
+  // 與 Drive 同步無關 —— 這是 Sheet 統計的獨立觸發來源，
+  // 確保刪除 Drive 程式碼後統計仍會運作。
+  refreshDownloadCounts().catch(console.error);
+  const statsTimer = setInterval(() => {
+    refreshDownloadCounts().catch(console.error);
+  }, SHEET_CACHE_TTL_MS);
+  statsTimer.unref?.();
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`APK Hub Server running on http://localhost:${PORT}`);
