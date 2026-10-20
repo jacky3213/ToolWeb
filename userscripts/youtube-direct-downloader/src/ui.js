@@ -293,6 +293,11 @@ export function createUI({ onStart, onPause, onResume, onCancel, onRefresh, onSe
   else document.addEventListener('DOMContentLoaded', mountPanel, { once: true });
 
   // ---- 按鈕：插入到影片頁 / Shorts 頁合適容器 ----
+  //
+  // ⚠️ 不可把 `ytd-watch-metadata` / `ytd-reel-video-renderer` **本體**當容器。
+  // 它們是 Polymer host，首次 stamp 會清掉不是自己產生的子節點 —— 太早 append
+  // 進去的按鈕會被吃掉，而且不會報錯、不會重試，看起來就是「完全沒有按鈕」。
+  // 只接受 Polymer 真正渲染出來的 actions 列。
   function findButtonContainer() {
     const selectors = [
       'ytd-watch-metadata #top-level-buttons-computed',
@@ -300,8 +305,6 @@ export function createUI({ onStart, onPause, onResume, onCancel, onRefresh, onSe
       'ytd-reel-video-renderer[is-active] #actions',
       'ytd-reel-video-renderer[is-active] #top-level-buttons-computed',
       '#top-level-buttons-computed',
-      'ytd-watch-metadata',
-      'ytd-reel-video-renderer[is-active]',
     ];
     for (const sel of selectors) {
       const node = document.querySelector(sel);
@@ -310,35 +313,67 @@ export function createUI({ onStart, onPause, onResume, onCancel, onRefresh, onSe
     return null;
   }
 
+  // 浮動備援：容器還沒渲染時先固定在左上角，保證一定看得到
+  function floatButton() {
+    if (!buttonEl) return;
+    buttonEl.classList.add('ytdl-btn-floating');
+    buttonEl.style.position = 'fixed';
+    buttonEl.style.top = '8px';
+    buttonEl.style.left = '8px';
+    buttonEl.style.zIndex = '2147483647';
+    if (document.body && buttonEl.parentNode !== document.body) {
+      document.body.appendChild(buttonEl);
+    }
+  }
+
   function ensureButton() {
-    if (buttonEl && document.contains(buttonEl)) {
-      // 若先前因容器尚未出現而浮動在 body 上，現在容器有了就重新歸位
-      if (buttonEl.classList.contains('ytdl-btn-floating')) {
-        const later = findButtonContainer();
-        if (later) { resetButtonPosition(); later.appendChild(buttonEl); }
+    if (!buttonEl) {
+      buttonEl = el('button', {
+        class: 'ytdl-btn ytdl-style-base',
+        id: 'ytdl-download-btn',
+        title: '下載此影片',
+      }, ['⬇ 下載']);
+      buttonEl.addEventListener('click', () => {
+        panel.hidden = !panel.hidden;
+      });
+    }
+
+    const container = findButtonContainer();
+
+    if (!document.contains(buttonEl)) {
+      // 首次建立，或先前的按鈕被 YouTube 重新渲染時移除
+      if (container) {
+        resetButtonPosition();
+        container.appendChild(buttonEl);
+      } else {
+        floatButton();
       }
       return;
     }
-    buttonEl = el('button', {
-      class: 'ytdl-btn ytdl-style-base',
-      id: 'ytdl-download-btn',
-      title: '下載此影片',
-    }, ['⬇ 下載']);
-    buttonEl.addEventListener('click', () => {
-      panel.hidden = !panel.hidden;
-    });
-    const container = findButtonContainer();
+
     if (container) {
-      container.appendChild(buttonEl);
-    } else {
-      // 找不到穩定容器時，浮動在左上角，保證可用；之後容器出現會自動歸位
-      buttonEl.classList.add('ytdl-btn-floating');
-      buttonEl.style.position = 'fixed';
-      buttonEl.style.top = '8px';
-      buttonEl.style.left = '8px';
-      buttonEl.style.zIndex = '2147483647';
-      document.body.appendChild(buttonEl);
+      // 仍在浮動，或容器被換掉（SPA 換頁 / Shorts 切換）→ 歸位
+      if (buttonEl.classList.contains('ytdl-btn-floating') || buttonEl.parentNode !== container) {
+        resetButtonPosition();
+        container.appendChild(buttonEl);
+      }
+    } else if (!buttonEl.classList.contains('ytdl-btn-floating')) {
+      // 原容器消失：退回浮動，保持可見
+      floatButton();
     }
+  }
+
+  // 低頻自我修復：YouTube 是 SPA，actions 列會被反覆重建，Shorts 換片也不觸發
+  // `yt-navigate-finish`。每秒只做一次 document.contains（成本可忽略），
+  // 僅在按鈕遺失或仍在浮動時才查詢選擇器。
+  let anchorTimer = null;
+  function startAnchorWatch() {
+    if (anchorTimer) return;
+    anchorTimer = setInterval(() => {
+      if (!buttonEl || !document.contains(buttonEl) || buttonEl.classList.contains('ytdl-btn-floating')) {
+        ensureButton();
+      }
+    }, 1000);
   }
 
   // 清除浮動樣式（歸位到頁面容器時用）
@@ -418,6 +453,10 @@ export function createUI({ onStart, onPause, onResume, onCancel, onRefresh, onSe
       btnToggle.disabled = true;
     }
   }
+
+  // 開機即啟動看門狗：即使 main 的 onNavigate 沒被觸發（SPA 事件時序、
+  // 或頁面已載入完成才注入），按鈕也會在一秒內出現。
+  startAnchorWatch();
 
   return {
     ensureButton,
