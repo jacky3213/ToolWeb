@@ -327,14 +327,19 @@ gh release create v1.5 public/apks/adskip.apk \
   **延後至後續變更（與本次重構無關的獨立議題）：**
   | 項目 | 行數 | 說明 |
   |---|---|---|
-  | `AddToolModal.tsx` | 496 | 完整刪除 |
-  | `AdminPasscodeModal.tsx` | 209 | 完整刪除 |
-  | `App.tsx` 管理相關 state/handler/render | ~100 | 刪除上述兩個元件後清理 |
-  | `Header` / `ToolCard` / `ToolDetailModal` 相關 props | ~25 | 連帶清理 |
-  | `POST /api/tools`（上傳工具） | `server.ts:801-832` | 需一併設計替代發布流程 |
-  | `DELETE /api/tools/:id`、`POST /api/tools/clear` | `server.ts:852-899` | 同上 |
-  | `POST /api/upload-apk` | `server.ts:1162-1208` | 同上 |
-  | `adminPasscode` / `isPasscodeRequired` 整套 | `server.ts:655-685` | 隨之移除 |
+  | ~~`AddToolModal.tsx`~~ | 496 | ✅ 已於 2026-10-20 完成清理 |
+  | ~~`AdminPasscodeModal.tsx`~~ | 209 | ✅ 已於 2026-10-20 完成清理 |
+  | ~~`App.tsx` 管理相關 state/handler/render~~ | ~100 | ✅ 已清理 |
+  | ~~`Header` / `ToolCard` 相關 props~~ | ~25 | ✅ 已清理 |
+  | ~~`POST /api/tools`~~ | — | ✅ 已移除 |
+  | ~~`DELETE /api/tools/:id`、`POST /api/tools/clear`~~ | — | ✅ 已移除 |
+  | ~~`POST /api/upload-apk`~~ | — | ✅ 已移除 |
+  | ~~`adminPasscode` / `isPasscodeRequired` 整套~~ | — | ✅ 已移除 |
+
+  **最終結果：** 網站成為純唯讀的下載站，伺服器只剩 4 個端點
+  （`GET /api/tools`、兩個下載路由、`POST /api/chat`）。
+  發布流程改為編輯 `tools.json` + 把檔案放入 `public/apks/`。
+  `data/` 目錄已完全刪除（啟動實測確認不會重新建立）。
 
   **拆分理由：** 移除 Drive 是**後端資料來源**變更（單一檔案 `server.ts`，約 350 行）；
   移除管理 UI 是**前端產品決策**（8 個檔案，約 900 行）。混在同一次變更裡，
