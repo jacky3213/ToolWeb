@@ -41,56 +41,6 @@ const GITHUB_RAW_BASE = process.env.GITHUB_RAW_BASE || 'https://raw.githubuserco
 const TOOLS_FILE = path.join(DATA_DIR, 'tools.json');
 const ADMIN_FILE = path.join(DATA_DIR, 'admin.json');
 
-// Default Preset Tools (Hardcoded in codebase so they survive any container restart)
-const DEFAULT_PRESET_TOOLS = [
-  {
-    id: 'adskip-apk',
-    name: '開屏跳過',
-    packageName: 'com.utility.adskip',
-    version: 'v1.4',
-    versionCode: 140,
-    minSdk: 'Android 7.0+ (API 24)',
-    architecture: 'universal',
-    fileSize: '762 KB',
-    icon: 'Zap',
-    category: 'Utility',
-    summary: '自動點擊開屏廣告與半屏廣告的跳過',
-    description: '無須root，純粹代為點擊開屏廣告與半屏廣告的跳過。協助您順暢開啟各類 App，減少等待時間與廣告干擾。',
-    changelog: ['v1.4 增加半屏廣告判定與自動跳過', 'v1.3 優化開屏按鈕偵測速度', '無須 Root 權限', '極簡流暢與超低背景耗電'],
-    downloadUrl: 'https://drive.google.com/drive/folders/14QqI6hdNNaThvOS8zIRtRrYzGdlrhdqI?usp=sharing',
-    downloadCount: 920,
-    rating: 5.0,
-    releaseDate: '2026-08-09',
-    checksumSha256: 'f8d2b1e4c9a6352018749aefcd12890a5b4c3d2e1f0987654321fedcba987654',
-    screenshots: [],
-    isOfficial: true,
-    isFeatured: true
-  },
-  {
-    id: 'uu-preloader',
-    name: 'Olevod 影片預載器 (Video Preloader)',
-    packageName: 'https://github.com/jacky3213',
-    version: 'v1.1.1',
-    versionCode: 111,
-    minSdk: 'Tampermonkey (Chrome/Firefox/Edge)',
-    architecture: 'universal',
-    fileSize: '31.1 KB',
-    icon: 'Terminal',
-    category: 'Tampermonkey',
-    summary: '在 Olevod 看片時提前預下載後續 HLS 分片，支援智慧預載下一集',
-    description: '在 Olevod 看片時提前預下載後續 HLS 分片（5/10/15/30 分鐘可選），支援智慧預下一集、即時速度/流量/命中率統計、暫停/清除快取、斷點恢復、自動收合、失敗退避重試。',
-    changelog: ['v1.1.1 支援 5/10/15/30 分鐘分片預載', '智慧預載下一集開頭', '支援 Tampermonkey 檢查更新機制'],
-    downloadUrl: '/api/download/UU-preloader.user.js',
-    scriptFileName: 'UU-preloader.user.js',
-    downloadCount: 50,
-    rating: 5.0,
-    releaseDate: '2026-09-24',
-    checksumSha256: '8a6ba64a472d9aa4cc8513ceffe66e21c59e3d1f024c8aac61b59ed43e3ff524',
-    screenshots: [],
-    isOfficial: true,
-    isFeatured: true
-  }
-];
 
 // 工具清單的唯一事實來源：repo 根目錄的 tools.json（manifest）+ public/apks/ 目錄列舉。
 // 不再從 data/tools.json 讀取 —— Cloud Run 磁碟是暫存的，runtime 狀態會在重啟後遺失。
@@ -274,356 +224,8 @@ async function refreshDownloadCounts(): Promise<void> {
   }
 }
 
-let lastDriveSyncTime = 0;
-let isSyncingDrive = false;
 
-interface DriveFileItem {
-  id: string;
-  name: string;
-}
 
-// Fetch all file items listed in a public Google Drive shared folder
-async function fetchFolderFilesFromGoogleDrive(folderUrl: string): Promise<DriveFileItem[]> {
-  try {
-    const folderIdMatch = folderUrl.match(/\/folders\/([a-zA-Z0-9_-]+)/);
-    if (!folderIdMatch) return [];
-    const folderId = folderIdMatch[1];
-
-    const res = await fetch(`https://drive.google.com/drive/folders/${folderId}?usp=sharing`, {
-      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
-    });
-    if (!res.ok) return [];
-
-    const html = await res.text();
-    const cleanHtml = html
-      .replace(/\\x22/g, "\"")
-      .replace(/\\x5b/g, "[")
-      .replace(/\\x5d/g, "]")
-      .replace(/\\\//g, "/");
-
-    const files: DriveFileItem[] = [];
-    const seenIds = new Set<string>();
-
-    const regex = /"([a-zA-Z0-9_-]{25,50})",\s*\["[a-zA-Z0-9_-]+"\],\s*"([^"]+)"/g;
-    let m;
-    while ((m = regex.exec(cleanHtml)) !== null) {
-      const fileId = m[1];
-      const fileName = m[2];
-      if (!seenIds.has(fileId)) {
-        seenIds.add(fileId);
-        files.push({ id: fileId, name: fileName });
-      }
-    }
-    return files;
-  } catch (err) {
-    console.error("[GDrive Folder Parse Error]:", err);
-    return [];
-  }
-}
-
-// Full Sync: Reads app-info.json / metadata.json and APK files directly from Google Drive
-async function syncGoogleDriveFolder(folderUrl: string, force = false): Promise<{ success: boolean; message: string; detectedFiles: string[] }> {
-  if (isSyncingDrive && !force) {
-    return { success: true, message: "同步進行中，請稍候", detectedFiles: [] };
-  }
-
-  isSyncingDrive = true;
-  console.log(`[GDrive Sync] Starting sync for: ${folderUrl}`);
-
-  try {
-    const files = await fetchFolderFilesFromGoogleDrive(folderUrl);
-    const detectedFileNames = files.map(f => f.name);
-    console.log(`[GDrive Sync] Detected files in Drive:`, detectedFileNames);
-
-    if (files.length === 0) {
-      isSyncingDrive = false;
-      // Mark sync as attempted even on failure so /api/download won't hammer Drive every 15s
-      lastDriveSyncTime = Date.now();
-      return {
-        success: false,
-        message: "未能從 Google Drive 資料夾讀取到檔案，請確認資料夾分享權限已設為『知道連結的任何人均可查看』",
-        detectedFiles: []
-      };
-    }
-
-    // 1. Check for JSON configuration file (e.g. app-info.json, metadata.json, tools.json, *.json)
-    const jsonFile = files.find(f => f.name.toLowerCase().endsWith('.json'));
-    let configData: any = null;
-
-    if (jsonFile) {
-      try {
-        console.log(`[GDrive Sync] Found JSON config file in Drive: ${jsonFile.name} (id: ${jsonFile.id})`);
-        const directUrl = `https://drive.usercontent.google.com/download?id=${jsonFile.id}&confirm=t`;
-        const res = await fetch(directUrl, {
-          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
-        });
-        if (res.ok) {
-          const text = await res.text();
-          configData = JSON.parse(text);
-          console.log(`[GDrive Sync] Successfully parsed ${jsonFile.name}`);
-        }
-      } catch (e) {
-        console.error(`[GDrive Sync] Failed to parse JSON config ${jsonFile.name}:`, e);
-      }
-    }
-
-    // 2. Check for APK binary files and download them
-    const apkFiles = files.filter(f => f.name.toLowerCase().endsWith('.apk'));
-    const downloadedApks: Record<string, { sizeFormatted: string; sha256: string; filePath: string }> = {};
-
-    for (const apk of apkFiles) {
-      try {
-        const destPath = path.join(UPLOADS_DIR, apk.name);
-        const directUrl = `https://drive.usercontent.google.com/download?id=${apk.id}&confirm=t`;
-        const res = await fetch(directUrl, {
-          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
-        });
-        if (res.ok) {
-          const buf = Buffer.from(await res.arrayBuffer());
-          if (buf.length > 500) {
-            fs.writeFileSync(destPath, buf);
-            const sizeKb = buf.length / 1024;
-            const sizeFormatted = sizeKb > 1024 ? `${(sizeKb / 1024).toFixed(1)} MB` : `${sizeKb.toFixed(0)} KB`;
-            const sha256 = crypto.createHash('sha256').update(buf).digest('hex');
-            downloadedApks[apk.name] = { sizeFormatted, sha256, filePath: destPath };
-            console.log(`[GDrive Sync] Downloaded and cached APK: ${apk.name} (${sizeFormatted}) sha256: ${sha256.substring(0, 10)}...`);
-          }
-        }
-      } catch (err) {
-        console.error(`[GDrive Sync] Failed to download APK ${apk.name}:`, err);
-      }
-    }
-
-    // 2.5 Check for Tampermonkey user scripts (.user.js or .js) in Google Drive and automatically parse metadata
-    const scriptFiles = files.filter(f => f.name.toLowerCase().endsWith('.user.js') || (f.name.toLowerCase().endsWith('.js') && !f.name.toLowerCase().endsWith('.json')));
-    const parsedScriptTools: any[] = [];
-
-    for (const scriptFile of scriptFiles) {
-      try {
-        const destPath = path.join(UPLOADS_DIR, scriptFile.name);
-        const directUrl = `https://drive.usercontent.google.com/download?id=${scriptFile.id}&confirm=t`;
-        const res = await fetch(directUrl, {
-          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
-        });
-        if (res.ok) {
-          const scriptText = await res.text();
-          fs.writeFileSync(destPath, scriptText, 'utf-8');
-
-          const sizeKb = (Buffer.byteLength(scriptText, 'utf-8') / 1024).toFixed(1);
-          const sha256 = crypto.createHash('sha256').update(scriptText).digest('hex');
-
-          // Auto-parse Tampermonkey metadata block // ==UserScript==
-          const nameMatch = scriptText.match(/@name\s+(.+)/);
-          const versionMatch = scriptText.match(/@version\s+(.+)/);
-          const descMatch = scriptText.match(/@description\s+(.+)/);
-          const nsMatch = scriptText.match(/@namespace\s+(.+)/);
-
-          const scriptToolId = scriptFile.name.replace(/\.user\.js$/, '').replace(/\.js$/, '').toLowerCase().replace(/[^a-z0-9_-]/g, '-');
-          const scriptToolName = nameMatch ? nameMatch[1].trim() : scriptFile.name.replace(/\.user\.js$/, '');
-          const scriptVersion = versionMatch ? (versionMatch[1].trim().startsWith('v') ? versionMatch[1].trim() : `v${versionMatch[1].trim()}`) : 'v1.0.0';
-          const scriptDesc = descMatch ? descMatch[1].trim() : `Tampermonkey 使用者腳本：${scriptToolName}`;
-          const scriptNamespace = nsMatch ? nsMatch[1].trim() : `userscript.${scriptToolId}`;
-
-          parsedScriptTools.push({
-            id: scriptToolId,
-            name: scriptToolName,
-            packageName: scriptNamespace,
-            version: scriptVersion,
-            versionCode: 100,
-            minSdk: 'Tampermonkey (Chrome/Firefox/Edge)',
-            architecture: 'universal',
-            fileSize: `${sizeKb} KB`,
-            icon: 'Terminal',
-            category: 'Tampermonkey',
-            summary: scriptDesc.length > 50 ? `${scriptDesc.substring(0, 47)}...` : scriptDesc,
-            description: scriptDesc,
-            changelog: [`自 Google Drive (${scriptFile.name}) 自動同步加載`],
-            downloadUrl: `/api/download/${scriptFile.name}`,
-            scriptFileName: scriptFile.name,
-            rating: 5.0,
-            releaseDate: new Date().toISOString().split('T')[0],
-            checksumSha256: sha256,
-            screenshots: [],
-            isOfficial: true,
-            isFeatured: false,
-            baseDownloadCount: 0
-          });
-
-          console.log(`[GDrive Sync] Auto-parsed user script from Drive: ${scriptFile.name} -> "${scriptToolName}" (${scriptVersion})`);
-        }
-      } catch (err) {
-        console.error(`[GDrive Sync] Failed to download/parse script ${scriptFile.name}:`, err);
-      }
-    }
-
-    // 3. Fetch latest recorded count from Google Sheet
-    const sheetCounts = await fetchDownloadCountsFromGoogleSheet();
-
-    // 4. Process Config & Update Store
-    let itemsToApply: any[] = [];
-    if (Array.isArray(configData)) {
-      itemsToApply = configData;
-    } else if (configData && typeof configData === 'object') {
-      itemsToApply = [configData];
-    }
-
-    if (itemsToApply.length > 0) {
-      for (const item of itemsToApply) {
-        let toolId = item.id;
-        if (!toolId) {
-          const rawApk = (item.apkFileName || (apkFiles.length === 1 ? apkFiles[0].name : '')).toLowerCase();
-          if (rawApk.includes('adskip')) {
-            toolId = 'adskip-apk';
-          } else if (rawApk) {
-            toolId = rawApk.replace(/\.apk$/i, '');
-          } else {
-            toolId = 'adskip-apk';
-          }
-        }
-        const apkName = item.apkFileName || (apkFiles.length === 1 ? apkFiles[0].name : 'adskip.apk');
-        const apkInfo = downloadedApks[apkName] || {
-          sizeFormatted: item.fileSize || '745 KB',
-          sha256: item.checksumSha256 || '87a933b3a5b57440a18460933f304ed1407a43a388896942c66e2391e3d1e5aa'
-        };
-
-        const baseCount = typeof item.downloadCount === 'number'
-          ? item.downloadCount
-          : (typeof item.baseDownloadCount === 'number' ? item.baseDownloadCount : 920);
-
-        const sheetCount = sheetCounts[toolId] || 0;
-        const memoryDelta = downloadsDelta[toolId] || 0;
-        // Total downloads = baseCount from Drive config + Sheet count (or memoryDelta if Sheet hasn't populated yet)
-        const recordedExternal = Math.max(sheetCount, memoryDelta);
-        const totalDownloads = baseCount + recordedExternal;
-
-        if (toolId === 'adskip') {
-          toolId = 'adskip-apk';
-        }
-
-        const existingIndex = apkToolsStore.findIndex(t => 
-          t.id === toolId || 
-          (toolId === 'adskip-apk' && (t.id === 'adskip' || t.id === 'adskip-apk')) ||
-          (item.packageName && t.packageName === item.packageName)
-        );
-        const updatedTool: any = {
-          id: toolId,
-          name: item.name || '開屏跳過',
-          packageName: item.packageName || 'com.utility.adskip',
-          version: item.version || 'v1.4',
-          versionCode: item.versionCode || 140,
-          minSdk: item.minSdk || 'Android 7.0+ (API 24)',
-          architecture: item.architecture || 'universal',
-          fileSize: apkInfo.sizeFormatted || item.fileSize || '745 KB',
-          icon: item.icon || 'Zap',
-          category: item.category || 'Utility',
-          summary: item.summary || '自動點擊開屏廣告與半屏廣告的跳過',
-          description: item.description || '無須root，純粹代為點擊開屏廣告與半屏廣告的跳過。協助您順暢開啟各類 App，減少等待時間與廣告干擾。',
-          changelog: Array.isArray(item.changelog)
-            ? item.changelog
-            : [item.changelog || 'v1.4 增加半屏廣告判定與自動跳過'],
-          downloadUrl: item.downloadUrl || folderUrl,
-          downloadCount: totalDownloads,
-          baseDownloadCount: baseCount,
-          apkFileName: apkName,
-          rating: typeof item.rating === 'number' ? item.rating : 5.0,
-          releaseDate: item.releaseDate || new Date().toISOString().split('T')[0],
-          checksumSha256: apkInfo.sha256 || item.checksumSha256 || '87a933b3a5b57440a18460933f304ed1407a43a388896942c66e2391e3d1e5aa',
-          screenshots: item.screenshots || [],
-          isOfficial: item.isOfficial ?? true,
-          isFeatured: item.isFeatured ?? true
-        };
-
-        if (existingIndex >= 0) {
-          apkToolsStore[existingIndex] = updatedTool;
-        } else {
-          apkToolsStore.push(updatedTool);
-        }
-      }
-    } else {
-      // No JSON in Drive, update preset adskip-apk with detected APK binary and sheet count
-      const toolId = 'adskip-apk';
-      const targetTool = apkToolsStore.find(t => t.id === toolId) || apkToolsStore[0];
-      if (targetTool) {
-        const baseCount = targetTool.baseDownloadCount || 920;
-        const sheetCount = sheetCounts[toolId] || 0;
-        const memoryDelta = downloadsDelta[toolId] || 0;
-        targetTool.downloadCount = baseCount + Math.max(sheetCount, memoryDelta);
-
-        if (apkFiles.length > 0) {
-          const firstApk = apkFiles[0];
-          const apkInfo = downloadedApks[firstApk.name];
-          if (apkInfo) {
-            targetTool.fileSize = apkInfo.sizeFormatted;
-            targetTool.checksumSha256 = apkInfo.sha256;
-            targetTool.apkFileName = firstApk.name;
-          }
-        }
-      }
-    }
-
-    // 4.5 Automatically merge parsed Google Drive scripts without requiring app-info.json
-    for (const parsedScript of parsedScriptTools) {
-      const toolId = parsedScript.id;
-      const sheetCount = sheetCounts[toolId] || 0;
-      const memoryDelta = downloadsDelta[toolId] || 0;
-      parsedScript.downloadCount = (parsedScript.baseDownloadCount || 0) + Math.max(sheetCount, memoryDelta);
-
-      const existingIndex = apkToolsStore.findIndex(t => t.id === toolId || (t.apkFileName && t.apkFileName === parsedScript.scriptFileName));
-      if (existingIndex >= 0) {
-        apkToolsStore[existingIndex] = {
-          ...apkToolsStore[existingIndex],
-          ...parsedScript,
-          downloadCount: Math.max(apkToolsStore[existingIndex].downloadCount || 0, parsedScript.downloadCount)
-        };
-      } else {
-        apkToolsStore.push(parsedScript);
-      }
-    }
-
-    // Ensure absolutely no duplicate entries exist in apkToolsStore
-    const finalCleanStore: any[] = [];
-    const seenFinalIds = new Set<string>();
-    for (const t of apkToolsStore) {
-      const canonicalId = (t.id === 'adskip' || t.packageName === 'com.utility.adskip') ? 'adskip-apk' : t.id;
-      if (!seenFinalIds.has(canonicalId)) {
-        seenFinalIds.add(canonicalId);
-        finalCleanStore.push({ ...t, id: canonicalId });
-      }
-    }
-    apkToolsStore = finalCleanStore;
-
-    saveTools();
-    saveDeltas();
-    lastDriveSyncTime = Date.now();
-    isSyncingDrive = false;
-
-    return {
-      success: true,
-      message: jsonFile
-        ? `成功自 Google Drive 讀取 ${jsonFile.name} 設定並同步 ${apkFiles.length} 個 APK 檔案！`
-        : `已同步 Google Drive 上的 APK 檔案。可依範本上傳 app-info.json 進行客製設定。`,
-      detectedFiles: detectedFileNames
-    };
-  } catch (err: any) {
-    console.error("[GDrive Sync Error]:", err);
-    isSyncingDrive = false;
-    lastDriveSyncTime = Date.now();
-    return {
-      success: false,
-      message: `同步時發生錯誤: ${err.message || err}`,
-      detectedFiles: []
-    };
-  }
-}
-
-// Automatically sync all tools from Google Drive on startup
-async function syncAllToolsFromGoogleDrive() {
-  const defaultFolder = "https://drive.google.com/drive/folders/14QqI6hdNNaThvOS8zIRtRrYzGdlrhdqI?usp=sharing";
-  await syncGoogleDriveFolder(defaultFolder, true);
-}
-
-// Trigger initial background sync on server boot
-syncAllToolsFromGoogleDrive();
 
 // ---- GitHub Raw refresh for Tampermonkey userscripts (source of truth) ----
 // Google Drive folder HTML scraping broke (Drive changed its DOM), so userscripts
@@ -754,11 +356,7 @@ async function startServer() {
   // Increase payload size limit for base64 file uploads
   app.use(express.json({ limit: '50mb' }));
 
-  // API 1: Get all tools (with auto periodic Drive sync in background)
   app.get("/api/tools", (req, res) => {
-    if (Date.now() - lastDriveSyncTime > 5 * 60 * 1000 && !isSyncingDrive) {
-      syncAllToolsFromGoogleDrive().catch(console.error);
-    }
     // Userscript source of truth is GitHub Raw — refresh frequently and cheaply
     if (Date.now() - lastGithubRefreshTime > 60 * 1000 && !isRefreshingGithub) {
       refreshScriptsFromGitHub().catch(console.error);
@@ -775,23 +373,6 @@ async function startServer() {
     res.json(clean);
   });
 
-  // API 1.5: Manual / UI Sync with Google Drive
-  app.all("/api/sync-gdrive", async (req, res) => {
-    try {
-      const defaultFolder = "https://drive.google.com/drive/folders/14QqI6hdNNaThvOS8zIRtRrYzGdlrhdqI?usp=sharing";
-      const folderUrl = req.body?.folderUrl || req.query?.folderUrl || defaultFolder;
-      const force = req.query?.force === 'true' || req.body?.force === true;
-
-      const result = await syncGoogleDriveFolder(folderUrl as string, force);
-      res.json({
-        ...result,
-        tools: apkToolsStore,
-        lastSyncTime: lastDriveSyncTime
-      });
-    } catch (err: any) {
-      res.status(500).json({ success: false, error: err.message || "同步失敗" });
-    }
-  });
 
   // API 2: Verify Admin Passcode / Status
   app.get("/api/admin/status", (req, res) => {
@@ -943,7 +524,7 @@ async function startServer() {
       return res.status(404).send("找不到該 APK 工具套件");
     }
 
-    const targetUrl = tool.downloadUrl || 'https://drive.google.com';
+    const targetUrl = tool.downloadUrl || '';
 
     const isUserScript = tool.category === 'Tampermonkey' || targetUrl.endsWith('.user.js') || (tool.downloadUrl && tool.downloadUrl.includes('.user.js'));
 
@@ -1052,20 +633,6 @@ async function startServer() {
       }
     }
 
-    // If not cached locally, attempt on-the-fly fetch from Google Drive
-    if (targetUrl.includes('drive.google.com')) {
-      await syncGoogleDriveFolder(targetUrl, true);
-      for (const candidate of localCandidates) {
-        if (fs.existsSync(candidate) && fs.statSync(candidate).size > 10) {
-          if (isUserScript) {
-            const rawScript = fs.readFileSync(candidate, 'utf-8');
-            const formatted = formatScriptWithDynamicMetadata(rawScript, path.basename(candidate), req);
-            return res.send(formatted);
-          }
-          return res.sendFile(candidate);
-        }
-      }
-    }
 
     // Fallback redirect if sync failed
     return res.redirect(302, targetUrl);
@@ -1121,18 +688,11 @@ async function startServer() {
       const isStale = Date.now() - lastGithubRefreshTime > 60 * 1000;
 
       if (fileMissing) {
-        // Refresh from GitHub Raw first (source of truth); fall back to Drive sync for discovery
+        // Refresh from GitHub Raw first (source of truth)
         try {
           await refreshScriptsFromGitHub();
         } catch (e) {
           console.error("[Download Route] GitHub refresh error:", e);
-        }
-        if (!fs.existsSync(localFilePath)) {
-          try {
-            await syncGoogleDriveFolder("https://drive.google.com/drive/folders/14QqI6hdNNaThvOS8zIRtRrYzGdlrhdqI?usp=sharing", true);
-          } catch (e) {
-            console.error("[Download Route] Drive sync error:", e);
-          }
         }
       } else if (isStale || req.query.force === 'true') {
         // Refresh in background asynchronously
