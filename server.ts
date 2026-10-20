@@ -5,6 +5,8 @@ import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
+import { reconcile } from './lib/reconcile-tools.ts';
+import { discoverScriptsOnDisk } from './lib/discover-scripts.ts';
 
 dotenv.config();
 
@@ -90,36 +92,31 @@ const DEFAULT_PRESET_TOOLS = [
   }
 ];
 
-// Persistent data store for APK tools
-let apkToolsStore: any[] = [];
-if (fs.existsSync(TOOLS_FILE)) {
-  try {
-    const raw = fs.readFileSync(TOOLS_FILE, 'utf-8');
-    apkToolsStore = JSON.parse(raw);
-  } catch (e) {
-    console.error("Failed to load tools.json:", e);
+// 工具清單的唯一事實來源：repo 根目錄的 tools.json（manifest）+ public/apks/ 目錄列舉。
+// 不再從 data/tools.json 讀取 —— Cloud Run 磁碟是暫存的，runtime 狀態會在重啟後遺失。
+const MANIFEST_FILE = path.join(process.cwd(), 'tools.json');
+
+function loadManifest(): any[] {
+  if (!fs.existsSync(MANIFEST_FILE)) {
+    throw new Error(
+      `[Config] 找不到 ${MANIFEST_FILE}。這是工具清單的唯一事實來源，請確認檔案已提交至版控。`
+    );
   }
+  const raw = fs.readFileSync(MANIFEST_FILE, 'utf-8');
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed)) {
+    throw new Error('[Config] tools.json 格式錯誤：頂層必須是陣列。');
+  }
+  return parsed;
 }
 
-if (!Array.isArray(apkToolsStore) || apkToolsStore.length === 0) {
-  apkToolsStore = [...DEFAULT_PRESET_TOOLS];
-} else {
-  // Deduplicate and update adskip-apk preset in store if present
-  const deduplicated: any[] = [];
-  const seenIds = new Set<string>();
+// manifest 提供顯示中繼資料；目錄列舉確保「push 到 GitHub 即生效」，包含全新腳本。
+let apkToolsStore: any[] = reconcile(
+  loadManifest(),
+  discoverScriptsOnDisk(UPLOADS_DIR)
+);
 
-  for (const t of apkToolsStore) {
-    let normId = t.id;
-    if (normId === 'adskip' || (t.packageName === 'com.utility.adskip')) {
-      normId = 'adskip-apk';
-    }
-    if (!seenIds.has(normId)) {
-      seenIds.add(normId);
-      deduplicated.push({ ...t, id: normId });
-    }
-  }
-  apkToolsStore = deduplicated;
-}
+console.log(`[Config] 已載入 ${apkToolsStore.length} 個工具（manifest + 目錄列舉）`);
 
 function saveTools() {
   try {
@@ -139,8 +136,6 @@ function saveTools() {
     console.error("Failed to write tools.json:", e);
   }
 }
-
-saveTools();
 
 // Persistence for download delta counts (so increments stay persistent alongside Google Drive base count)
 const DELTAS_FILE = path.join(DATA_DIR, 'downloads_delta.json');
